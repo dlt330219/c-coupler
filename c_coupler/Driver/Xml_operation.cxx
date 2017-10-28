@@ -170,25 +170,23 @@ void write_components_into_xml(Comp_comm_group_mgt_mgr *comp_comm_group_mgt_mgr)
     root_element = new TiXmlElement("Components");
     XML_file->LinkEndChild(root_element);
     write_comp_node_into_xml(root_element,root);
-    sprintf(XML_file_name, "%s/CCPL_configs/XML/components.xml",comp_comm_group_mgt_mgr->get_root_working_dir());
+    sprintf(XML_file_name,"/data2/work/dongliting/components.xml"); //"%s/CCPL_configs/XML/components.xml",comp_comm_group_mgt_mgr->get_root_working_dir());
 
     XML_file->SaveFile(XML_file_name);
 
 }
 
-bool search_element_by_attribute(TiXmlElement *parent_Element, TiXmlElement *element,char *attribute_name, char *attribute_value )
+TiXmlElement *search_element_by_attribute(TiXmlElement *parent_Element,char *attribute_name, const char *attribute_value )
 {
     TiXmlNode *child;
-    element = parent_Element;
     for (child = parent_Element->FirstChild(); child != NULL; child = child->NextSibling())
     {
 		TiXmlElement *temp = child->ToElement();
 		if (strcmp(temp->Attribute(attribute_name), attribute_value) == 0){
-			element = temp;
-			return true;
+			return temp;
 		}
     }
-    return false;
+    return NULL;
 }
 
 void write_fields_into_xml(Memory_mgt *memory_manager)
@@ -202,38 +200,37 @@ void write_fields_into_xml(Memory_mgt *memory_manager)
     {
     	root_element = new TiXmlElement("fields");
     	XML_file->LinkEndChild(root_element);
-	
-	//memory_manager->get_fields_mem(fields_mem);
+	std::vector<Field_mem_info*> fields_mem;	
+	memory_manager->get_fields_mem(&fields_mem);
     	for(int i = 0; i < memory_manager->get_num_fields(); i ++)
     	{
-		Field_mem_info *field_mem = memory_manager->get_field_instance(i);
-		char *comp_id;
-		sprintf(comp_id, "%d", field_mem->get_comp_id());
-		TiXmlElement *field_parent_element;
-		search_element_by_attribute(root_element,field_parent_element,"comp_id",comp_id);
+		char * temp_id;
+		sprintf(temp_id, "%d", fields_mem[i]->get_comp_id());
+		const char* comp_id = temp_id;
+		TiXmlElement *field_parent_element = search_element_by_attribute(root_element,"comp_id",comp_id);
 
-		if (field_parent_element == root_element)
+		if (!field_parent_element)
 		{
 		    TiXmlElement *comp_element = new TiXmlElement("component");
-	     	root_or_comp_element->LinkEndChild(comp_element);
-		    comp_element->SetAttribute("comp_id",field_mem->get_comp_id());
+	     	    root_element->LinkEndChild(comp_element);
+		    comp_element->SetAttribute("comp_id",fields_mem[i]->get_comp_id());
 		    field_parent_element = comp_element;
 		}
-
 		TiXmlElement *field_element;
-		if(search_element_by_attribute(field_parent_element,field_element,"field_name",field_mem->get_field_name())){
-			continue;
+		field_element = search_element_by_attribute(field_parent_element,"field_name",fields_mem[i]->get_field_name());
+		if(field_element){
+		    continue;
 		}
 		field_element = new TiXmlElement("field");
 		field_parent_element->LinkEndChild(field_element);
-		field_element->SetAttribute("field_name", field_mem->get_field_name());
-		//field_element->SetAttribute("field_id",field_mem->get_field_instance_id());
-		field_element->SetAttribute("grid_id",field_mem->get_grid_id());
-		field_element->SetAttribute("decomp_id",field_mem->get_decomp_id());
-		field_element->SetAttribute("field_unit",field_mem->get_unit());
+		field_element->SetAttribute("field_name", fields_mem[i]->get_field_name());
+		//field_element->SetAttribute("field_id",fields_mem[i]->get_field_instance_id());
+		field_element->SetAttribute("grid_id",fields_mem[i]->get_grid_id());
+		field_element->SetAttribute("decomp_id",fields_mem[i]->get_decomp_id());
+		field_element->SetAttribute("field_unit",fields_mem[i]->get_unit());
    	}
 
-    sprintf(XML_file_name, "%s/CCPL_configs/XML/fields.xml", comp_comm_group_mgt_mgr->get_root_working_dir());
+    sprintf(XML_file_name, "/data2/work/dongliting/fields.xml");//"%s/CCPL_configs/XML/fields.xml", comp_comm_group_mgt_mgr->get_root_working_dir());
     XML_file->SaveFile(XML_file_name);
     }
 }
