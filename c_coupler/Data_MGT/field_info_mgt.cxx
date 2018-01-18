@@ -76,12 +76,13 @@ Field_info_mgt::Field_info_mgt()
 	}
 	
 	for (TiXmlNode *field_XML_node = XML_file->FirstChildElement(); field_XML_node != NULL; field_XML_node = field_XML_node->NextSibling()) {
+		if (field_XML_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *field_XML_element = field_XML_node->ToElement();
-		if (comp_comm_group_mgt_mgr->get_current_proc_global_id() == 0)
-			EXECUTION_REPORT(REPORT_ERROR, -1, words_are_the_same(field_XML_element->Value(),"field"), "The XML element for specifying the attributes of a public field in the XML configuration file \"%s\" should be named \"field\". Please verify the XML file arround the line number %d.", XML_file_name, field_XML_element->Row());
+		EXECUTION_REPORT(REPORT_ERROR, -1, words_are_the_same(field_XML_element->Value(),"field"), "The XML element for specifying the attributes of a public field in the XML configuration file \"%s\" should be named \"field\". Please verify the XML file arround the line number %d.", XML_file_name, field_XML_element->Row());
 		const char *field_name = get_XML_attribute(-1, 80, field_XML_element, "name", XML_file_name, line_number, "name of a field", "configuration of the attributes of shared fields for coupling");
 		const field_attr *existing_field = search_field_info(field_name);
-		if (existing_field != NULL && comp_comm_group_mgt_mgr->get_current_proc_global_id() == 0)
+		if (existing_field != NULL)
 			EXECUTION_REPORT(REPORT_ERROR, -1, false, "Cannot spefify the attributes of field \"%s\" in the XML file \"%s\" around the line number %d again because it has already been specified around the line number %d", field_name, XML_file_name, line_number, existing_field->line_number);
 		const char *field_long_name = get_XML_attribute(-1, 1000, field_XML_element, "long_name", XML_file_name, line_number, "long name of a field", "configuration of the attributes of shared fields for coupling");
 		const char *field_dimensions = get_XML_attribute(-1, -1, field_XML_element, "dimensions", XML_file_name, line_number, "information of dimensions (0D, H2D, V1D or V3D) of a field", "configuration of the attributes of shared fields for coupling");

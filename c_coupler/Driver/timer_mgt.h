@@ -68,6 +68,11 @@
 #define TIME_UNIT_STRING_MONTH          "\"month\", \"months\", \"nmonth\", \"nmonths\""
 #define TIME_UNIT_STRING_YEAR           "\"year\", \"years\", \"nyear\", \"nyears\""
 
+#define RUNTYPE_MARK_INITIAL            1
+#define RUNTYPE_MARK_CONTINUE           2
+#define RUNTYPE_MARK_BRANCH             3
+#define RUNTYPE_MARK_HYBRID             4
+
 
 #include "common_utils.h"
 #include <vector>
@@ -137,6 +142,7 @@ class Time_mgt
         int start_month;
         int start_day;
         int start_second;
+        int restart_second;
         int previous_year;   
         int previous_month;
         int previous_day; 
@@ -155,6 +161,8 @@ class Time_mgt
         int time_step_in_second; 
         int current_num_elapsed_day;
 		int start_num_elapsed_day;
+		int restart_num_elapsed_day;		
+		long restart_full_time;
 		int stop_num_elapsed_day;
         int current_step_id;
 		int restarted_step_id;
@@ -166,6 +174,7 @@ class Time_mgt
 		char exp_model_name[NAME_STR_SIZE];
 		char case_desc[NAME_STR_SIZE];
 		char run_type[NAME_STR_SIZE];
+		int runtype_mark;
 		char stop_option[NAME_STR_SIZE];
 		char rest_freq_unit[NAME_STR_SIZE];
 		int rest_freq_count;
@@ -173,12 +182,14 @@ class Time_mgt
 		int rest_refdate;
 		int rest_refsecond;
 		bool advance_time_synchronized;
+		bool time_has_been_advanced;
 		int stop_n;
 
     public:
 		Time_mgt() {}
 		Time_mgt(int, const char *);
         ~Time_mgt();
+		void initialize_to_start_time();
         void advance_model_time(const char*, bool);
 		void advance_time(int &, int &, int &, int &, int &, int);
         int get_current_year() { return current_year; }
@@ -216,7 +227,6 @@ class Time_mgt
 		void get_elapsed_days_from_start_date(int*, int*);
 		void get_elapsed_days_from_reference_date(int*, int*);
 		void get_current_time(int&, int&, int&, int&, int, const char*);
-		void reset_timer();
 		bool check_is_time_legal(int, int, int, int, const char*);
 		bool get_is_leap_year_on() { return leap_year_on; }
 		int get_comp_id() { return comp_id; }
@@ -238,6 +248,10 @@ class Time_mgt
 		int get_rest_refsecond() { return rest_refsecond; }
 		bool is_first_restart_step() { return current_step_id == restarted_step_id; }
 		void calculate_stop_time(int, int, int, int);
+		bool get_time_has_been_advanced() { return time_has_been_advanced; }
+		void reset_current_time_to_start_time(const char*);
+		long get_restart_full_time() { return restart_full_time; }
+		int get_runtype_mark() { return runtype_mark; }
 };
 
 

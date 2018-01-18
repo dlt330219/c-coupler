@@ -115,6 +115,8 @@ int IO_field_mgt::register_IO_fields(int num_field_inst, int size_field_inst_ids
 		check_API_parameter_field_instance(comp_id, API_ID_FIELD_MGT_REG_IO_FIELDs_from_INSTs, comm, "registering I/O fields", field_inst_ids[i], "field_inst_ids (detailed field instances)", annotation);	
 	for (int i = 0; i < num_field_inst; i ++)
 		IO_fields.push_back(new IO_field(TYPE_IO_FIELD_PREFIX|IO_fields.size(), field_inst_ids[i], memory_manager->get_field_instance(field_inst_ids[i])->get_field_name(), annotation));
+	
+	return 0;
 }
 
 
@@ -201,10 +203,10 @@ IO_output_procedure::IO_output_procedure(int comp_id, int procedure_id, Coupling
 void IO_output_procedure::execute()
 {
 	if (export_interface != NULL)
-		export_interface->execute(false, field_update_status, IO_fields.size(), "IO output procedure export interface execute");
+		export_interface->execute(false, API_ID_INTERFACE_EXECUTE_WITH_ID, field_update_status, IO_fields.size(), "IO output procedure export interface execute");
 
 	if (import_interface != NULL) {
-		import_interface->execute(false, field_update_status, IO_fields.size(), "IO output procedure import interface execute");
+		import_interface->execute(false, API_ID_INTERFACE_EXECUTE_WITH_ID, field_update_status, IO_fields.size(), "IO output procedure import interface execute");
 		if (field_timer->is_timer_on()) {
 			if (comp_comm_group_mgt_mgr->get_current_proc_id_in_comp(comp_id, "in IO_output_procedure::execute") == 0) {
 				if (netcdf_file_object == NULL || file_timer->is_timer_on()) {
@@ -244,9 +246,9 @@ Coupling_connection *IO_output_procedure::generate_coupling_connection(int conne
 		coupling_connection = new Coupling_connection(coupling_generator->apply_connection_id());
 		strcpy(coupling_connection->dst_comp_full_name, comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in IO_output_procedure::generate_coupling_connection")->get_full_name());
 		strcpy(coupling_connection->dst_interface_name, import_interface->get_interface_name());
-		std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> src_comp_interface;
-		strcpy(src_comp_interface.first, coupling_connection->dst_comp_full_name);
-		strcpy(src_comp_interface.second, export_interface->get_interface_name());
+		std::pair<const char*,const char*> src_comp_interface;
+		src_comp_interface.first = strdup(coupling_connection->dst_comp_full_name);
+		src_comp_interface.second = strdup(export_interface->get_interface_name());
 		coupling_connection->src_comp_interfaces.push_back(src_comp_interface);
 		std::vector<const char*> import_fields_name;
 		import_interface->get_fields_name(&import_fields_name);

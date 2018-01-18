@@ -33,7 +33,7 @@ Runtime_remap_algorithm::Runtime_remap_algorithm(Runtime_remapping_weights *runt
 		true_dst_field_instance = specified_dst_field_instance;
 		transform_data_type = false;
 	}
-	else EXECUTION_REPORT(REPORT_ERROR, -1, false, "Software error in Runtime_remap_algorithm::Runtime_remap_algorithm: data type is wrong");
+	else EXECUTION_REPORT(REPORT_ERROR, -1, false, "Software error in Runtime_remap_algorithm::Runtime_remap_algorithm: data type is wrong: data type %s of src field %s vs data type %s of dst field %s", src_field_instance->get_field_data()->get_grid_data_field()->data_type_in_application, src_field_instance->get_field_name(), dst_field_instance->get_field_data()->get_grid_data_field()->data_type_in_application, dst_field_instance->get_field_name());
 }
 
 

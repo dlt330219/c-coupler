@@ -830,7 +830,7 @@ void Remap_grid_class::set_lev_grid_sigma_info(double top_value, const double *s
 		remap_data_field->required_data_size = remap_data_field->read_data_size = grid_size;
 		remap_data_field->data_buf = new double [grid_size];
 		memcpy(remap_data_field->data_buf, hybrid_grid_coefficients, grid_size*sizeof(double));
-		sigma_value_field = new Remap_grid_data_class(this, remap_data_field);
+		hybrid_grid_coefficient_field = new Remap_grid_data_class(this, remap_data_field);
 	}
 	allocate_sigma_grid_specific_fields(hybrid_grid_coefficient_field, sigma_value_field, NULL, top_value, scale_factor);
 }
@@ -1895,7 +1895,7 @@ void Remap_grid_class::set_grid_boundary(double min_lon, double max_lon, double 
     Remap_grid_class *leaf_grids[256], *lon_sub_grid;
 
 
-    EXECUTION_REPORT(REPORT_ERROR, -1, this->get_is_sphere_grid(), "%s is not a sphere grid, while only sphere grid can be set boundary");
+    EXECUTION_REPORT(REPORT_ERROR, -1, this->get_is_sphere_grid(), "%s is not a sphere grid, while only sphere grid can be set boundary", grid_name);
     EXECUTION_REPORT(REPORT_ERROR, -1, boundary_min_lon == NULL_COORD_VALUE, "the boundary of grid %s has been set before", grid_name);
     EXECUTION_REPORT(REPORT_ERROR, -1, min_lon >= -360 && min_lon <= 360, "the minimum longitude of the boundary of grid %s must be between 0 and 360 degrees", grid_name);
     EXECUTION_REPORT(REPORT_ERROR, -1, max_lon >= -360 && max_lon <= 360, "the maximum longitude of the boundary of grid %s must be between 0 and 360 degrees", grid_name);

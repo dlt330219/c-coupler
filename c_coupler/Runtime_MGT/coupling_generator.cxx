@@ -14,6 +14,16 @@
 
 
 
+void clean_string_pair_vector(std::vector< std::pair<const char*, const char *> > &string_pair_vector)
+{
+	for (int i = 0; i < string_pair_vector.size(); i ++) {
+		delete [] string_pair_vector[i].first;
+		delete [] string_pair_vector[i].second;
+	}
+	string_pair_vector.clear();
+}
+
+
 MPI_Comm create_union_comm_common(MPI_Comm comp1, MPI_Comm comm2, int current_proc_id1, int current_proc_id2, std::vector<int> &procs_global_ids1, std::vector<int> &procs_global_ids2, int connection_id, int *proc_ranks_in_union_comm1, int *proc_ranks_in_union_comm2)
 {
     MPI_Group common_group, comm_group1, comm_group2, union_group;
@@ -118,6 +128,7 @@ Coupling_connection::Coupling_connection(int id)
 
 Coupling_connection::~Coupling_connection()
 {
+	clean_string_pair_vector(src_comp_interfaces);
 }
 
 
@@ -332,11 +343,10 @@ bool Coupling_connection::exchange_grid(Comp_comm_group_mgt_node *sender_comp_no
 	transfer_array_from_one_comp_to_another(sender_comp_node->get_current_proc_local_id(), sender_comp_node->get_root_proc_global_id(), receiver_comp_node->get_current_proc_local_id(), receiver_comp_node->get_root_proc_global_id(), receiver_comp_node->get_comm_group(), &temp_array_buffer, buffer_content_size);
 
 	if (original_grid_status == 0) {
-		char temp_string[NAME_STR_SIZE];
-		sprintf(temp_string, "%s%s", grid_name, sender_comp_node->get_full_name());
 		read_data_from_array_buffer(&checksum_mask, sizeof(long), temp_array_buffer, buffer_content_size, true);
 		read_data_from_array_buffer(&bottom_field_variation_type, sizeof(int), temp_array_buffer, buffer_content_size, true);
 		Remap_grid_class *mirror_grid = new Remap_grid_class(NULL, sender_comp_node->get_full_name(), temp_array_buffer, buffer_content_size);
+		mirror_grid = remap_grid_manager->search_remap_grid_with_grid_name(mirror_grid->get_grid_name());
 		EXECUTION_REPORT(REPORT_ERROR, -1, buffer_content_size == 0, "software error in Coupling_connection::exchange_grid: wrong buffer_content_size");
 		receiver_original_grid = original_grid_mgr->get_original_grid(original_grid_mgr->add_original_grid(sender_comp_node->get_comp_id(), grid_name, mirror_grid));
 		if (receiver_original_grid->get_bottom_field_variation_type() != bottom_field_variation_type)
@@ -380,7 +390,7 @@ void Coupling_connection::add_bottom_field_coupling_info(int field_connection_in
 	bottom_field_coupling_info->field_connection_indx = field_connection_indx;
 	bottom_field_coupling_info->is_dynamic_bottom_field = V3D_remapping_weights->get_src_original_grid()->get_bottom_field_variation_type() == BOTTOM_FIELD_VARIATION_DYNAMIC;
 	bottom_field_coupling_info->bottom_field_inst = V3D_remapping_weights->allocate_intermediate_V3D_grid_bottom_field();
-	bottom_field_coupling_info->H2D_runtime_remapping_weights = runtime_remapping_weights_mgr->search_or_generate_runtime_remapping_weights(src_comp_node->get_comp_id(), dst_comp_node->get_comp_id(), 
+	bottom_field_coupling_info->H2D_runtime_remapping_weights = runtime_remapping_weights_mgr->search_or_generate_runtime_remapping_weights(src_comp_node->get_comp_full_name(), dst_comp_node->get_comp_full_name(), 
 		original_grid_mgr->get_original_grid(V3D_remapping_weights->get_src_decomp_info()->get_grid_id()), original_grid_mgr->get_original_grid(V3D_remapping_weights->get_dst_decomp_info()->get_grid_id()), 
 		remapping_setting, V3D_remapping_weights->get_dst_decomp_info());
 
@@ -437,6 +447,7 @@ void Coupling_connection::generate_src_bottom_field_coupling_info()
 void Coupling_connection::generate_interpolation(bool has_frac_remapping)
 {
 	Original_grid_info *src_original_grid = NULL, *dst_original_grid = NULL;
+	int i, j;
 
 	
 	if (current_proc_id_src_comp != -1)
@@ -467,6 +478,8 @@ void Coupling_connection::generate_interpolation(bool has_frac_remapping)
 				continue;
 			}
 			else EXECUTION_REPORT_LOG(REPORT_LOG, dst_comp_node->get_comp_id(), true, "The data interpolation from grid \"%s\" to \"%s\" is necessary", src_original_grid->get_grid_name(), dst_original_grid->get_grid_name());
+			EXECUTION_REPORT(REPORT_ERROR, dst_comp_node->get_comp_id(), words_are_the_same(src_fields_info[i]->data_type, DATA_TYPE_FLOAT) || words_are_the_same(src_fields_info[i]->data_type, DATA_TYPE_DOUBLE),  "Error happens when trying to generate data interpolation for the field \%s\" in the coupling from the component model \"%s\" (interface is \"%s\") to the component model \"%s\" (interface is \"%s\"): the data type in the source component model is not floating-point but %s. Please verify.", fields_name[i], src_comp_interfaces[0].first, src_comp_interfaces[0].second, dst_comp_full_name, dst_interface_name, src_fields_info[i]->data_type);
+			EXECUTION_REPORT(REPORT_ERROR, dst_comp_node->get_comp_id(), words_are_the_same(dst_fields_info[i]->data_type, DATA_TYPE_FLOAT) || words_are_the_same(dst_fields_info[i]->data_type, DATA_TYPE_DOUBLE),  "Error happens when trying to generate data interpolation for the field \%s\" in the coupling from the component model \"%s\" (interface is \"%s\") to the component model \"%s\" (interface is \"%s\"): the data type in the source component model is not floating-point but %s. Please verify.", fields_name[i], src_comp_interfaces[0].first, src_comp_interfaces[0].second, dst_comp_full_name, dst_interface_name, dst_fields_info[i]->data_type);	
 			if (src_original_grid->get_original_CoR_grid()->is_sigma_grid()) {
 				EXECUTION_REPORT(REPORT_ERROR, dst_comp_node->get_comp_id(), src_original_grid->get_bottom_field_variation_type() != BOTTOM_FIELD_VARIATION_UNSET, "Fail to generate interpolation from component \"%s\" to \"%s\": the surface field of the source 3-D grid \"%s\" with SIGMA or HYBRID vertical coordinate has not been specified. Please verify.", src_comp_interfaces[0].first, dst_comp_full_name, src_original_grid->get_grid_name());
 				EXECUTION_REPORT(REPORT_ERROR, dst_comp_node->get_comp_id(), src_original_grid->get_bottom_field_variation_type() != BOTTOM_FIELD_VARIATION_EXTERNAL, "Fail to generate interpolation from component \"%s\" to \"%s\": it is not allowed to set the surface field of the source 3-D grid \"%s\" with SIGMA or HYBRID vertical coordinate to be an external field. Please verify.", src_comp_interfaces[0].first, dst_comp_full_name, src_original_grid->get_grid_name());
@@ -476,11 +489,35 @@ void Coupling_connection::generate_interpolation(bool has_frac_remapping)
 				if (dst_original_grid->get_bottom_field_variation_type() == BOTTOM_FIELD_VARIATION_EXTERNAL)
 					EXECUTION_REPORT(REPORT_ERROR, dst_comp_node->get_comp_id(), src_original_grid->get_original_CoR_grid()->is_sigma_grid(), "Fail to generate interpolation from component \"%s\" to \"%s\": when the target 3-D grid \"%s\" with SIGMA or HYBRID vertical coordinate has external surface field, the source 3-D grid \"%s\" must include SIGMA or HYBRID vertical coordinate. Please verify. ", src_comp_interfaces[0].first, dst_comp_full_name, dst_original_grid->get_grid_name(), src_original_grid->get_grid_name());
 			}	
-			dst_fields_info[i]->runtime_remapping_weights = runtime_remapping_weights_mgr->search_or_generate_runtime_remapping_weights(src_comp_node->get_comp_id(), dst_comp_node->get_comp_id(), src_original_grid, dst_original_grid, &field_remapping_setting, decomps_info_mgr->search_decomp_info(dst_fields_info[i]->decomp_name, dst_comp_node->get_comp_id()));
+			dst_fields_info[i]->runtime_remapping_weights = runtime_remapping_weights_mgr->search_or_generate_runtime_remapping_weights(src_comp_node->get_comp_full_name(), dst_comp_node->get_comp_full_name(), src_original_grid, dst_original_grid, &field_remapping_setting, decomps_info_mgr->search_decomp_info(dst_fields_info[i]->decomp_name, dst_comp_node->get_comp_id()));
 			if (src_original_grid->get_original_CoR_grid()->is_sigma_grid())
 				add_bottom_field_coupling_info(i, dst_fields_info[i]->runtime_remapping_weights, &field_remapping_setting);
-		}	
-	}	
+		}
+	}
+	
+	int *remapping_weights_index_table = new int [fields_name.size()];
+	long array_size = fields_name.size()*sizeof(int);
+	if (current_proc_id_dst_comp != -1) 
+		for (int i = 0; i < fields_name.size(); i ++)
+			if (dst_fields_info[i]->runtime_remapping_weights == NULL || !dst_fields_info[i]->runtime_remapping_weights->get_src_original_grid()->is_H2D_grid())
+				remapping_weights_index_table[i] = -1;
+			else {
+				for (j = 0; j < i; j ++)
+					if (dst_fields_info[i]->runtime_remapping_weights == dst_fields_info[j]->runtime_remapping_weights)
+						break;
+				remapping_weights_index_table[i] = j;
+			}
+	transfer_array_from_one_comp_to_another(current_proc_id_dst_comp, dst_comp_node->get_local_proc_global_id(0), current_proc_id_src_comp, src_comp_node->get_local_proc_global_id(0), src_comp_node->get_comm_group(), (char**)(&remapping_weights_index_table), array_size);
+	for (int i = 0; i < fields_name.size(); i ++) {
+		if (remapping_weights_index_table[i] == -1)
+			continue;
+		if (remapping_weights_index_table[i] != i) {
+			if (current_proc_id_src_comp != -1)
+				src_fields_info[i]->runtime_remapping_weights = src_fields_info[remapping_weights_index_table[i]]->runtime_remapping_weights;	
+		}
+		else runtime_remapping_weights_mgr->transfer_runtime_remapping_weights(dst_fields_info[i]->runtime_remapping_weights, &(src_fields_info[i]->runtime_remapping_weights), dst_comp_node, src_comp_node);
+	}
+	delete [] remapping_weights_index_table;
 
 	generate_src_bottom_field_coupling_info();
 	exchange_bottom_fields_info();
@@ -499,15 +536,15 @@ void Coupling_connection::exchange_connection_fields_info()
 
 
 	if (current_proc_id_dst_comp != -1)
-		write_connection_fields_info_into_array(import_interface, &dst_fields_info_array, buffer_max_size, dst_fields_info_array_size, &dst_timer, dst_inst_or_aver, dst_time_step_in_second);
+		write_connection_fields_info_into_array(import_interface, &dst_fields_info_array, buffer_max_size, dst_fields_info_array_size, &dst_timer, dst_inst_or_aver, dst_time_step_in_second, dst_current_year, dst_current_month, dst_current_day, dst_current_second);
 	if (current_proc_id_src_comp != -1)
-		write_connection_fields_info_into_array(export_interface, &src_fields_info_array, buffer_max_size, src_fields_info_array_size, &src_timer, src_inst_or_aver, src_time_step_in_second);
+		write_connection_fields_info_into_array(export_interface, &src_fields_info_array, buffer_max_size, src_fields_info_array_size, &src_timer, src_inst_or_aver, src_time_step_in_second, src_current_year, src_current_month, src_current_day, src_current_second);
 	transfer_array_from_one_comp_to_another(current_proc_id_src_comp, src_comp_root_proc_global_id, current_proc_id_dst_comp, dst_comp_root_proc_global_id, dst_comp_node->get_comm_group(), &src_fields_info_array, src_fields_info_array_size);
 	transfer_array_from_one_comp_to_another(current_proc_id_dst_comp, dst_comp_root_proc_global_id, current_proc_id_src_comp, src_comp_root_proc_global_id, src_comp_node->get_comm_group(), &dst_fields_info_array, dst_fields_info_array_size);
 	comp_id = export_interface != NULL? export_interface->get_comp_id() : import_interface->get_comp_id();
-	read_connection_fields_info_from_array(src_fields_info, src_fields_info_array, src_fields_info_array_size, comp_id, &src_timer, src_inst_or_aver, src_time_step_in_second);
+	read_connection_fields_info_from_array(src_fields_info, src_fields_info_array, src_fields_info_array_size, comp_id, &src_timer, src_inst_or_aver, src_time_step_in_second, src_current_year, src_current_month, src_current_day, src_current_second);
 	comp_id = import_interface != NULL? import_interface->get_comp_id() : export_interface->get_comp_id();
-	read_connection_fields_info_from_array(dst_fields_info, dst_fields_info_array, dst_fields_info_array_size, comp_id, &dst_timer, dst_inst_or_aver, dst_time_step_in_second);
+	read_connection_fields_info_from_array(dst_fields_info, dst_fields_info_array, dst_fields_info_array_size, comp_id, &dst_timer, dst_inst_or_aver, dst_time_step_in_second, dst_current_year, dst_current_month, dst_current_day, dst_current_second);
 	EXECUTION_REPORT(REPORT_ERROR, -1, fields_name.size() == src_fields_info.size() && fields_name.size() == dst_fields_info.size(), "Software error in Coupling_connection::exchange_connection_fields_info");
 
 	src_timer->reset_remote_lag_count();
@@ -534,11 +571,15 @@ void Coupling_connection::read_fields_info_from_array(std::vector<Interface_fiel
 }
 
 
-void Coupling_connection::read_connection_fields_info_from_array(std::vector<Interface_field_info*> &fields_info, const char *array_buffer, long buffer_content_iter, int comp_id, Coupling_timer **timer, int &inst_or_aver, int &time_step_in_second)
+void Coupling_connection::read_connection_fields_info_from_array(std::vector<Interface_field_info*> &fields_info, const char *array_buffer, long buffer_content_iter, int comp_id, Coupling_timer **timer, int &inst_or_aver, int &time_step_in_second,
+	                                                                             int &current_year, int &current_month, int &current_day, int &current_second)
 {
 	bool successful;
 
-	
+	read_data_from_array_buffer(&current_second, sizeof(int), array_buffer, buffer_content_iter, true);
+	read_data_from_array_buffer(&current_day, sizeof(int), array_buffer, buffer_content_iter, true);
+	read_data_from_array_buffer(&current_month, sizeof(int), array_buffer, buffer_content_iter, true);
+	read_data_from_array_buffer(&current_year, sizeof(int), array_buffer, buffer_content_iter, true);
 	read_data_from_array_buffer(&time_step_in_second, sizeof(int), array_buffer, buffer_content_iter, true);
 	read_data_from_array_buffer(&inst_or_aver, sizeof(int), array_buffer, buffer_content_iter, true);
 	*timer = new Coupling_timer(array_buffer, buffer_content_iter, comp_id, true, successful);
@@ -571,7 +612,8 @@ void Coupling_connection::write_field_info_into_array(Field_mem_info *field, cha
 }
  
 
-void Coupling_connection::write_connection_fields_info_into_array(Inout_interface *inout_interface, char **array, long &buffer_max_size, long &buffer_content_size, Coupling_timer **timer, int &inst_or_aver, int &time_step_in_second)
+void Coupling_connection::write_connection_fields_info_into_array(Inout_interface *inout_interface, char **array, long &buffer_max_size, long &buffer_content_size, Coupling_timer **timer, int &inst_or_aver, int &time_step_in_second, 
+	                                                                               int &current_year, int &current_month, int &current_day, int &current_second)
 {
 	char tmp_string[NAME_STR_SIZE];
 	int field_local_index;
@@ -586,9 +628,14 @@ void Coupling_connection::write_connection_fields_info_into_array(Inout_interfac
 	*timer = inout_interface->get_timer();
 	inst_or_aver = inout_interface->get_inst_or_aver();
 	time_step_in_second = components_time_mgrs->get_time_mgr(inout_interface->get_comp_id())->get_time_step_in_second();
+	components_time_mgrs->get_time_mgr(inout_interface->get_comp_id())->get_current_time(current_year, current_month, current_day, current_second, 0, "in Coupling_connection::write_connection_fields_info_into_array");
 	(*timer)->write_timer_into_array(array, buffer_max_size, buffer_content_size);
 	write_data_into_array_buffer(&inst_or_aver, sizeof(int), array, buffer_max_size, buffer_content_size);
 	write_data_into_array_buffer(&time_step_in_second, sizeof(int), array, buffer_max_size, buffer_content_size);
+	write_data_into_array_buffer(&current_year, sizeof(int), array, buffer_max_size, buffer_content_size);
+	write_data_into_array_buffer(&current_month, sizeof(int), array, buffer_max_size, buffer_content_size);
+	write_data_into_array_buffer(&current_day, sizeof(int), array, buffer_max_size, buffer_content_size);
+	write_data_into_array_buffer(&current_second, sizeof(int), array, buffer_max_size, buffer_content_size);
 }
 
 
@@ -654,11 +701,13 @@ Import_direction_setting::Import_direction_setting(int host_comp_id, Import_inte
 {
 	TiXmlElement *fields_element = NULL, *components_element = NULL, *remapping_element = NULL, *merge_element = NULL;
 	int i, line_number;
-	std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> producer_info;
+	std::pair<const char*, const char*> producer_info;
 
 
 	strcpy(this->interface_name, interface_name);
-	for (TiXmlNode *detailed_element_node = redirection_element->FirstChild(); detailed_element_node != NULL; detailed_element_node = detailed_element_node->NextSibling()) {
+	for (TiXmlNode *detailed_element_node = redirection_element->FirstChild(); detailed_element_node != NULL; detailed_element_node = detailed_element_node->NextSibling()) {		
+		if (detailed_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *detailed_element = detailed_element_node->ToElement();
 		if (words_are_the_same(detailed_element->Value(), "fields")) {
 			if (!is_XML_setting_on(host_comp_id, detailed_element, XML_file_name, "the status of \"fields\"", "import interface configuration file"))
@@ -670,6 +719,8 @@ Import_direction_setting::Import_direction_setting(int host_comp_id, Import_inte
 			if (words_are_the_same(default_str, "off")) {
 				fields_default_setting = 0;
 				for (TiXmlNode *field_element_node = detailed_element->FirstChild(); field_element_node != NULL; field_element_node = field_element_node->NextSibling()) {
+					if (field_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+						continue;					
 					TiXmlElement *field_element = field_element_node->ToElement();
 					EXECUTION_REPORT(REPORT_ERROR, host_comp_id, words_are_the_same(field_element->Value(),"field"), "When setting the attribute \"fields\" for the redirection configuration of the import interface \"%s\" in the XML file \"%s\", please use the keyword \"field\" for the name of a field (arround line %d of the XML file)", interface_name, XML_file_name, field_element->Row());
 					const char *field_name = get_XML_attribute(host_comp_id, -1, field_element, "name", XML_file_name, line_number, "the name of a field", "import interface configuration file");	
@@ -712,16 +763,18 @@ Import_direction_setting::Import_direction_setting(int host_comp_id, Import_inte
 			if (words_are_the_same(default_str, "off")) {
 				components_default_setting = 0;
 				for (TiXmlNode *component_element_node = detailed_element->FirstChild(); component_element_node != NULL; component_element_node = component_element_node->NextSibling()) {
+					if (component_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+						continue;
 					TiXmlElement *component_element = component_element_node->ToElement();
 					EXECUTION_REPORT(REPORT_ERROR, host_comp_id, words_are_the_same(component_element->Value(),"component"), "When setting the attribute \"components\" for the redirection configuration of the import interface \"%s\" in the XML file \"%s\", please use the keyword \"component\" for the full name of a component. Please verify the XML file arround the line number %d.", interface_name, XML_file_name, component_element->Row());
 					const char *full_name = get_XML_attribute(host_comp_id, 512, component_element, "comp_full_name", XML_file_name, line_number, "the full name of a component", "import interface configuration file");
-					if (check_comp_existence)
-						EXECUTION_REPORT(REPORT_ERROR, host_comp_id, comp_comm_group_mgt_mgr->search_global_node(full_name) != NULL, "When setting the redirection configuration of the import interface \"%s\" in the XML file \"%s\", the full component name (\"%s\") is wrong. Please verify the XML file arround the line number %d.", interface_name, XML_file_name, full_name, line_number);
-					strcpy(producer_info.first, full_name);
+//					if (check_comp_existence)
+//						EXECUTION_REPORT(REPORT_ERROR, host_comp_id, comp_comm_group_mgt_mgr->search_global_node(full_name) != NULL, "When setting the redirection configuration of the import interface \"%s\" in the XML file \"%s\", the full component name (\"%s\") is wrong. Please verify the XML file arround the line number %d.", interface_name, XML_file_name, full_name, line_number);
+					producer_info.first = strdup(full_name);
 					const char *interface_name = component_element->Attribute("interface_name", &line_number);
 					if (interface_name == NULL)
-						producer_info.second[0] = '\0';
-					else strcpy(producer_info.second, interface_name);
+						producer_info.second = strdup("\0");
+					else producer_info.second = strdup(interface_name);
 					for (i = 0; i < producers_info.size(); i ++)
 						if (words_are_the_same(producers_info[i].first, producer_info.first) && words_are_the_same(producers_info[i].second, producer_info.second))
 							break;
@@ -733,8 +786,8 @@ Import_direction_setting::Import_direction_setting(int host_comp_id, Import_inte
 				components_default_setting = 1;
 				const int *all_components_ids = comp_comm_group_mgt_mgr->get_all_components_ids();
 				for (i = 1; i < all_components_ids[0]; i ++) {
-					strcpy(producer_info.first, comp_comm_group_mgt_mgr->get_global_node_of_local_comp(all_components_ids[i], "in Import_direction_setting()")->get_comp_full_name());
-					producer_info.second[0] = '\0';
+					producer_info.first = strdup(comp_comm_group_mgt_mgr->get_global_node_of_local_comp(all_components_ids[i], "in Import_direction_setting()")->get_comp_full_name());
+					producer_info.second = strdup("\0");
 					producers_info.push_back(producer_info);
 				}
 			}
@@ -754,6 +807,7 @@ Import_direction_setting::Import_direction_setting(int host_comp_id, Import_inte
 
 Import_direction_setting::~Import_direction_setting()
 {
+	clean_string_pair_vector(producers_info);
 }
 
 
@@ -761,7 +815,7 @@ Import_interface_configuration::Import_interface_configuration(int host_comp_id,
 {
 	int *fields_count, line_number;
 	Inout_interface *interface_ptr = all_interfaces_mgr->get_interface(comp_full_name, interface_name);
-	std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > producers_info;
+	std::vector<std::pair<const char*, const char*> > producers_info;
 	
 	
 	strcpy(this->interface_name, interface_name);
@@ -774,6 +828,8 @@ Import_interface_configuration::Import_interface_configuration(int host_comp_id,
 		fields_src_producers_info.push_back(producers_info);
 
 	for (TiXmlNode *redirection_element_node = interface_element->FirstChild(); redirection_element_node != NULL; redirection_element_node = redirection_element_node->NextSibling()) {
+		if (redirection_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *redirection_element = redirection_element_node->ToElement();
 		EXECUTION_REPORT(REPORT_ERROR, interface_ptr->get_comp_id(), words_are_the_same(redirection_element->Value(),"import_connection"), "When setting the redirection configuration of the import interface \"%s\" in the XML file \"%s\", the XML element for specifying the redirection configuration should be named \"import_connection\". Please verify the XML file arround the line number %d.", interface_name, XML_file_name, redirection_element->Row());
 		if (!is_XML_setting_on(interface_ptr->get_comp_id(), redirection_element, XML_file_name, "the status of some redirection configurations for an import interface", "import interface configuration file"))
@@ -785,18 +841,19 @@ Import_interface_configuration::Import_interface_configuration(int host_comp_id,
 }
 
 
-void Import_interface_configuration::add_field_src_component(int comp_id, const char *field_name, std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> producer_info)
+void Import_interface_configuration::add_field_src_component(int comp_id, const char *field_name, std::pair<const char*, const char*> producer_info)
 {
 	int i;
+	
 	for (i = 0; i < fields_name.size(); i ++)
 		if (words_are_the_same(field_name, fields_name[i]))
 			break;
-	EXECUTION_REPORT(REPORT_ERROR, comp_id, i < fields_name.size(), "Software error in Import_interface_configuration::add_field_src_component");
-	fields_src_producers_info[i].push_back(producer_info);
+	EXECUTION_REPORT(REPORT_ERROR, comp_id, i < fields_name.size(), "Software error in Import_interface_configuration::add_field_src_component");	
+	fields_src_producers_info[i].push_back(std::make_pair(strdup(producer_info.first), strdup(producer_info.second)));
 }
 
 
-void Import_interface_configuration::get_field_import_configuration(const char *field_name, std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > &producers_info)
+void Import_interface_configuration::get_field_import_configuration(const char *field_name, std::vector<std::pair<const char*, const char*> > &producers_info)
 {
 	int i;
 
@@ -804,11 +861,18 @@ void Import_interface_configuration::get_field_import_configuration(const char *
 	for (i = 0; i < fields_name.size(); i ++)
 		if (words_are_the_same(fields_name[i], field_name)) {
 			for (int j = 0; j < fields_src_producers_info[i].size(); j ++)
-				producers_info.push_back(fields_src_producers_info[i][j]);
+				producers_info.push_back(std::make_pair(strdup(fields_src_producers_info[i][j].first), strdup(fields_src_producers_info[i][j].second)));
 			break;
 		}
 
 	EXECUTION_REPORT(REPORT_ERROR, -1, i < fields_name.size(), "Software error in Import_interface_configuration::get_field_import_configuration");
+}
+
+
+Import_interface_configuration::~Import_interface_configuration()
+{
+	for (int i = 0; i < fields_src_producers_info.size(); i ++)
+		clean_string_pair_vector(fields_src_producers_info[i]);
 }
 
 
@@ -828,7 +892,9 @@ Component_import_interfaces_configuration::Component_import_interfaces_configura
 	}
 	TiXmlElement *root_XML_element = XML_file->FirstChildElement();
 	TiXmlNode *root_XML_element_node = get_XML_first_child_of_unique_root(host_comp_id, XML_file_name, XML_file);
-	for (; root_XML_element_node != NULL; root_XML_element_node = root_XML_element_node->NextSibling()) {
+	for (; root_XML_element_node != NULL; root_XML_element_node = root_XML_element_node->NextSibling()) {	
+		if (root_XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		root_XML_element = root_XML_element_node->ToElement();
 		if (words_are_the_same(root_XML_element->Value(),"local_import_interfaces"))
 			break;
@@ -839,6 +905,8 @@ Component_import_interfaces_configuration::Component_import_interfaces_configura
 	}
 
 	for (TiXmlNode *interface_XML_element_node = root_XML_element->FirstChild(); interface_XML_element_node != NULL; interface_XML_element_node = interface_XML_element_node->NextSibling()) {
+		if (interface_XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *interface_XML_element = interface_XML_element_node->ToElement();
 		EXECUTION_REPORT(REPORT_ERROR, -1, words_are_the_same(interface_XML_element->Value(),"import_interface"), "The XML element for specifying the configuration information of an import interface in the XML configuration file \"%s\" should be named \"import_interface\". Please verify the XML file arround the line number %d.", XML_file_name, interface_XML_element->Row());
 		const char *interface_name = get_XML_attribute(host_comp_id, 80, interface_XML_element, "name", XML_file_name, line_number, "the \"name\" of an import interface", "import interface configuration file");
@@ -868,9 +936,9 @@ Component_import_interfaces_configuration::~Component_import_interfaces_configur
 }
 
 
-void Component_import_interfaces_configuration::get_interface_field_import_configuration(const char *interface_name, const char *field_name, std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > &producers_info)
+void Component_import_interfaces_configuration::get_interface_field_import_configuration(const char *interface_name, const char *field_name, std::vector<std::pair<const char*, const char*> > &producers_info)
 {
-	producers_info.clear();
+	clean_string_pair_vector(producers_info);
 	for (int i = 0; i < import_interfaces_configuration.size(); i ++)
 		if (words_are_the_same(import_interfaces_configuration[i]->get_interface_name(), interface_name)) 
 			import_interfaces_configuration[i]->get_field_import_configuration(field_name, producers_info);
@@ -903,6 +971,7 @@ void Coupling_generator::clear()
 	for (int i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
 		delete [] all_comp_fullnames_for_coupling_generation[i];
 	all_comp_fullnames_for_coupling_generation.clear();
+	individual_or_family_generation.clear();
 }
 
 
@@ -914,24 +983,26 @@ void Coupling_generator::synchronize_latest_connection_id(MPI_Comm comm)
 }
 
 
-void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool is_overall_generation)
+void Coupling_generator::generate_coupling_procedures_common(int API_id, MPI_Comm comm, bool is_overall_generation, const char *annotation)
 {
-	bool define_use_wrong = false;
 	char *temp_array_buffer = NULL, field_name[NAME_STR_SIZE];
 	long current_array_buffer_size, max_array_buffer_size;
-	int temp_int;	
+	int temp_int, num_pushed_comp_node = 0;	
 	Coupling_connection *coupling_connection;
-	std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> src_comp_interface;
+	std::pair<const char *,const char*> src_comp_interface;
 	int current_proc_local_id;
 	Comp_comm_group_mgt_node *local_comp_node = NULL, *temp_comp_node, *existing_comp_node;
+	char API_label[NAME_STR_SIZE];
 	
 
 	EXECUTION_REPORT(REPORT_ERROR, -1, MPI_Comm_rank(comm, &current_proc_local_id) == MPI_SUCCESS);	
+	get_API_hint(-1, API_id, API_label);
 	if (current_proc_local_id == 0)
 		EXECUTION_REPORT_LOG(REPORT_LOG, -1, true, "Start to generate coupling procedures commonly");
 	synchronize_latest_connection_id(comm);
 	inout_interface_mgr->get_all_unconnected_inout_interface_fields_info(all_comp_fullnames_for_coupling_generation, &temp_array_buffer, current_array_buffer_size, comm);
 	bcast_array_in_one_comp(current_proc_local_id, &temp_array_buffer, current_array_buffer_size, comm);
+
 	for (int i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
 		local_comp_node = comp_comm_group_mgt_mgr->search_global_node(all_comp_fullnames_for_coupling_generation[i]);
 		if (local_comp_node != NULL && local_comp_node->get_current_proc_local_id() != -1)
@@ -939,6 +1010,19 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 		local_comp_node = NULL;
 	}
 	EXECUTION_REPORT(REPORT_ERROR, -1, local_comp_node != NULL, "Software error in Coupling_generator::generate_coupling_procedures: wrong local_comp_node");
+
+	for (int i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
+		temp_comp_node = comp_comm_group_mgt_mgr->load_comp_info_from_XML(local_comp_node->get_comp_id(), all_comp_fullnames_for_coupling_generation[i], comm);
+		existing_comp_node = comp_comm_group_mgt_mgr->search_global_node(all_comp_fullnames_for_coupling_generation[i]);
+		if (existing_comp_node == NULL) {
+			comp_comm_group_mgt_mgr->push_comp_node(temp_comp_node);
+			num_pushed_comp_node ++;
+			existing_comp_node = temp_comp_node;
+		}
+		else delete temp_comp_node;
+		if (existing_comp_node->get_current_proc_local_id() != -1)
+			EXECUTION_REPORT(REPORT_ERROR, existing_comp_node->get_comp_id(), !components_time_mgrs->get_time_mgr(existing_comp_node->get_comp_id())->get_time_has_been_advanced(), "Error happens when calling the API \"%s\": fail to generate coupling procedures because the time of the component model \"%s\" has been advanced before this API call. Please check the model code related to the annotation \"%s\"", API_label, all_comp_fullnames_for_coupling_generation[i], annotation);
+	}
 
 	if (current_proc_local_id == 0) {
 		Inout_interface_mgt *all_interfaces_mgr = new Inout_interface_mgt(temp_array_buffer, current_array_buffer_size);
@@ -951,7 +1035,7 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 				std::vector<const char*> import_fields_name;
 				import_interfaces_of_a_component[j]->get_fields_name(&import_fields_name);
 				for (int k = 0; k < import_fields_name.size(); k ++) {
-					std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > configuration_export_producer_info;
+					std::vector<std::pair<const char*, const char*> > configuration_export_producer_info;
 					coupling_connection = new Coupling_connection(coupling_generator->apply_connection_id());
 					comp_import_interfaces_config->get_interface_field_import_configuration(import_interfaces_of_a_component[j]->get_interface_name(), import_fields_name[k], configuration_export_producer_info);
 					strcpy(coupling_connection->dst_comp_full_name, all_comp_fullnames_for_coupling_generation[i]);
@@ -963,8 +1047,8 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 							for (int l = 0; l < export_fields_dst_components[field_index].size(); l ++) {
 								if (words_are_the_same(export_fields_dst_components[field_index][l].first, all_comp_fullnames_for_coupling_generation[i]))
 									continue;
-								strcpy(src_comp_interface.first, export_fields_dst_components[field_index][l].first);
-								strcpy(src_comp_interface.second, export_fields_dst_components[field_index][l].second);
+								src_comp_interface.first = strdup(export_fields_dst_components[field_index][l].first);
+								src_comp_interface.second = strdup(export_fields_dst_components[field_index][l].second);
 								coupling_connection->src_comp_interfaces.push_back(src_comp_interface);
 							}
 						}
@@ -973,42 +1057,34 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 								for (int m = 0; m < export_fields_dst_components[field_index].size(); m ++)
 									if (words_are_the_same(configuration_export_producer_info[l].first, export_fields_dst_components[field_index][m].first)) {
 										if (strlen(configuration_export_producer_info[l].second) == 0 || words_are_the_same(configuration_export_producer_info[l].second, export_fields_dst_components[field_index][m].second)) {
-											strcpy(src_comp_interface.first, export_fields_dst_components[field_index][m].first);
-											strcpy(src_comp_interface.second, export_fields_dst_components[field_index][m].second);
+											src_comp_interface.first = strdup(export_fields_dst_components[field_index][m].first);
+											src_comp_interface.second = strdup(export_fields_dst_components[field_index][m].second);
 											coupling_connection->src_comp_interfaces.push_back(src_comp_interface);
 										}
 									}
 							}
 						}
 					}
-					if (coupling_connection->src_comp_interfaces.size() == 1)
-						printf("field \"%s\" of import interface \"%s\" in component \"%s\" have %d source as follows. \n", coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name, coupling_connection->src_comp_interfaces.size());
-					else if (coupling_connection->src_comp_interfaces.size() > 1) {
-						printf("ERROR: field \"%s\" of import interface \"%s\" in component \"%s\" have more than 1 (%d) sources as follows. Please add or modify the corresponding configuration XML file\n", coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name, coupling_connection->src_comp_interfaces.size());
-						define_use_wrong = true;
-					}					
-					else if (is_overall_generation) {
-						define_use_wrong = true;
-						if (export_fields_dst_components[field_index].size() == 0)
-							printf("ERROR: field \"%s\" of import interface \"%s\" in component \"%s\" does not have source: no component exports this field. \n", coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name);
-						else {
-							printf("ERROR: field \"%s\" of import interface \"%s\" in component \"%s\" does not have source: there are components (as follows) exporting this field, however, none of which is specified in the corresponding configuration XML file\n", coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name);						
-							for (int j = 0; j < export_fields_dst_components[field_index].size(); j ++)
-								printf("		Component is \"%s\", interface is \"%s\"\n", export_fields_dst_components[field_index][j].first, export_fields_dst_components[field_index][j].second);
-						}	
+					char *report_string = NULL;
+					if (coupling_connection->src_comp_interfaces.size() > 0) {
+						report_string = new char [NAME_STR_SIZE*coupling_connection->src_comp_interfaces.size()];
+						report_string[0] = '\0';
+						for (int j = 0; j < coupling_connection->src_comp_interfaces.size(); j ++)
+							sprintf(report_string, "%s             %d) Component model is \"%s\", export interface is \"%s\"\n", report_string, j+1, coupling_connection->src_comp_interfaces[j].first, coupling_connection->src_comp_interfaces[j].second);					
 					}
-					for (int j = 0; j < coupling_connection->src_comp_interfaces.size(); j ++)
-						printf("		component is \"%s\", interface is \"%s\"\n", coupling_connection->src_comp_interfaces[j].first, coupling_connection->src_comp_interfaces[j].second);
-					if (coupling_connection->src_comp_interfaces.size() == 1)
+					if (coupling_connection->src_comp_interfaces.size() == 1) {
+						EXECUTION_REPORT_LOG(REPORT_LOG, -1, true, "Field \"%s\" of the import interface \"%s\" in the component model \"%s\" have one source as follows. %s\n", coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name, report_string);
 						all_coupling_connections.push_back(coupling_connection);
+					}	
+					else if (coupling_connection->src_comp_interfaces.size() > 1)
+						EXECUTION_REPORT(REPORT_ERROR, -1, false, "Error happens when calling the API \"%s\" for coupling generation: Field \"%s\" of the import interface \"%s\" in the component model \"%s\" have more than one source as follows. Please verify.\n%s\n", API_label, coupling_connection->fields_name[0], coupling_connection->dst_interface_name, coupling_connection->dst_comp_full_name, report_string);
 					else delete coupling_connection;
+					if (report_string != NULL)
+						delete [] report_string;
 				}
-
 			}
 			delete comp_import_interfaces_config;
 		}
-		
-		EXECUTION_REPORT(REPORT_ERROR, -1, !define_use_wrong, "Errors are reported when automatically generating coupling procedures");	
 		
 		for (int j, i = all_coupling_connections.size() - 1; i >= 0; i --) {
 			for (j = 0; j < i; j ++)
@@ -1070,8 +1146,11 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 			}		
 			read_data_from_array_buffer(&num_sources, sizeof(int), temp_array_buffer, buffer_content_iter, true);
 			for (int j = 0; j < num_sources; j ++) {
-				read_data_from_array_buffer(src_comp_interface.first, NAME_STR_SIZE, temp_array_buffer, buffer_content_iter, true);
-				read_data_from_array_buffer(src_comp_interface.second, NAME_STR_SIZE, temp_array_buffer, buffer_content_iter, true);
+				char tmp_str[NAME_STR_SIZE];
+				read_data_from_array_buffer(tmp_str, NAME_STR_SIZE, temp_array_buffer, buffer_content_iter, true);
+				src_comp_interface.first = strdup(tmp_str);
+				read_data_from_array_buffer(tmp_str, NAME_STR_SIZE, temp_array_buffer, buffer_content_iter, true);
+				src_comp_interface.second = strdup(tmp_str);
 				coupling_connection->src_comp_interfaces.push_back(src_comp_interface);
 			}
 			all_coupling_connections.push_back(coupling_connection);
@@ -1080,21 +1159,11 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 	}
 
 	delete [] temp_array_buffer;
-	int num_pushed_comp_node = 0;
-	for (int i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
-		temp_comp_node = comp_comm_group_mgt_mgr->load_comp_info_from_XML(local_comp_node->get_comp_id(), all_comp_fullnames_for_coupling_generation[i], comm);
-		existing_comp_node = comp_comm_group_mgt_mgr->search_global_node(all_comp_fullnames_for_coupling_generation[i]);
-		if (existing_comp_node == NULL) {
-			comp_comm_group_mgt_mgr->push_comp_node(temp_comp_node);
-			num_pushed_comp_node ++;
-		}
-		else delete temp_comp_node;
-	}
 	for (int i = 0; i < all_coupling_connections.size(); i ++) {
 		all_coupling_connections[i]->generate_a_coupling_procedure(false);
 	}
 	for (int i = 0; i < num_pushed_comp_node; i ++)
-		comp_comm_group_mgt_mgr->pop_comp_node();
+		delete comp_comm_group_mgt_mgr->pop_comp_node();
 
 	clear();
 
@@ -1106,21 +1175,27 @@ void Coupling_generator::generate_coupling_procedures_common(MPI_Comm comm, bool
 
 
 
-void Coupling_generator::generate_coupling_procedures_internal(int comp_id, bool family_generation)
+void Coupling_generator::generate_coupling_procedures_internal(int comp_id, bool family_generation, const char *annotation)
 {
 	char *temp_array_buffer = NULL;
 	long current_array_buffer_size, max_array_buffer_size;
 
 
-	if (family_generation)
+	if (family_generation) {
 		comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures")->get_all_descendant_real_comp_fullnames(comp_id, all_comp_fullnames_for_coupling_generation, &temp_array_buffer, max_array_buffer_size, current_array_buffer_size);
-	else all_comp_fullnames_for_coupling_generation.push_back(strdup(comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures")->get_full_name()));
-	generate_coupling_procedures_common(comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures"), (comp_id & TYPE_ID_SUFFIX_MASK)==0);
+		generate_coupling_procedures_common(API_ID_COUPLING_GEN_FAMILY, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures"), (comp_id & TYPE_ID_SUFFIX_MASK)==0, annotation);
+	}
+	else {
+		all_comp_fullnames_for_coupling_generation.push_back(strdup(comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures")->get_full_name()));
+		generate_coupling_procedures_common(API_ID_COUPLING_GEN_INDIVIDUAL, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id, "in Coupling_generator::generate_coupling_procedures"), (comp_id & TYPE_ID_SUFFIX_MASK)==0, annotation);
+	}
 }
 
 
 void Coupling_generator::generate_IO_procedures()
 {
+	return;   ////// to be modified
+/*
 	const int *sorted_comp_ids = comp_comm_group_mgt_mgr->get_sorted_comp_ids();
 
 	components_IO_output_procedures_mgr->add_all_components_IO_output_procedures();
@@ -1133,6 +1208,7 @@ void Coupling_generator::generate_IO_procedures()
 	for (int i = 0; i < all_IO_connections.size(); i ++) {
 		all_IO_connections[i]->generate_a_coupling_procedure(false);
 	}
+*/
 }
 
 
@@ -1201,32 +1277,86 @@ void Coupling_generator::transfer_interfaces_info_from_one_component_to_another(
 
 void Coupling_generator::begin_external_coupling_generation()
 {
-	EXECUTION_REPORT(REPORT_ERROR, -1, all_comp_fullnames_for_coupling_generation.size() == 0, "Software error in Coupling_generator::begin_external_coupling_generation");
+	EXECUTION_REPORT(REPORT_ERROR, -1, all_comp_fullnames_for_coupling_generation.size() == 0 && individual_or_family_generation.size() == 0, "Software error in Coupling_generator::begin_external_coupling_generation");
 }
 
 
-void Coupling_generator::add_comp_for_external_coupling_generation(const char *comp_full_name, const char *annotation)
+void Coupling_generator::add_comp_for_external_coupling_generation(const char *comp_full_name, int individual_or_family, const char *annotation)
 {
 	int i;
 
 	
 	EXECUTION_REPORT(REPORT_ERROR, -1, strlen(comp_full_name) > 0, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the full name of a component model cannot be an empty string. Please verify the model code with the annotation \"%s\"", annotation);
+	EXECUTION_REPORT(REPORT_ERROR, -1, individual_or_family == 1 || individual_or_family == 2, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the value of the parameter \"individual_or_family\" must be 1 (individual) or 2 (family). Please verify the model code with the annotation \"%s\"", annotation);
 	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
-		if (words_are_the_same(comp_full_name, all_comp_fullnames_for_coupling_generation[i]))
+		if (words_are_the_same(comp_full_name, all_comp_fullnames_for_coupling_generation[i])) {
+			if (individual_or_family_generation[i] == 1)
+				individual_or_family_generation[i] = individual_or_family;
 			break;
-	if (i == all_comp_fullnames_for_coupling_generation.size())
+		}
+	if (i == all_comp_fullnames_for_coupling_generation.size()) {
 		all_comp_fullnames_for_coupling_generation.push_back(strdup(comp_full_name));
+		individual_or_family_generation.push_back(individual_or_family);
+	}
 }
 
 
-void Coupling_generator::do_external_coupling_generation(const char *annotation)
+void Coupling_generator::sort_comp_full_names(std::vector<const char*> &comp_full_names, std::vector<int> *comp_index)
 {
-	std::vector<char *> temp_all_comp_fullnames_for_coupling_generation;
-	int i, j, k, num_comps = all_comp_fullnames_for_coupling_generation.size();
+	std::vector<const char *> temp_comp_full_names;
+	std::vector<int> temp_comp_index;
+	int i, j, k, num_comps = comp_full_names.size();
+
+
+	for (i = 0; i < num_comps; i ++) {
+		k = 0;
+		for (j = 1; j < comp_full_names.size(); j ++)
+			if (strcmp(comp_full_names[k], comp_full_names[j]) > 0)
+				k = j;
+		temp_comp_full_names.push_back(comp_full_names[k]);
+		comp_full_names.erase(comp_full_names.begin()+k);
+		if (comp_index != NULL) {
+			temp_comp_index.push_back((*comp_index)[k]);
+			comp_index->erase(comp_index->begin()+k);
+		}
+	}
+	EXECUTION_REPORT(REPORT_ERROR, -1, num_comps == temp_comp_full_names.size() && comp_full_names.size() == 0, "Software error in Coupling_generator::do_external_coupling_generation");
+
+	for (i = 0; i < temp_comp_full_names.size(); i ++) {
+		comp_full_names.push_back(temp_comp_full_names[i]);
+		if (comp_index != NULL)
+			comp_index->push_back(temp_comp_index[i]);
+	}	
+}
+
+
+void Coupling_generator::do_overall_coupling_generation(const char *local_root_comp_full_name, const char *annotation)
+{
+	int i; 
+
+	
+	comp_comm_group_mgt_mgr->get_root_comps_for_overall_coupling_generation(all_comp_fullnames_for_coupling_generation);
+	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
+		if (words_are_the_same(local_root_comp_full_name, all_comp_fullnames_for_coupling_generation[i]))
+			break;
+	if (i == all_comp_fullnames_for_coupling_generation.size()) {
+		clear();
+		return;
+	}
+
+	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
+		individual_or_family_generation.push_back(2);	
+	do_external_coupling_generation(API_ID_COMP_MGT_END_COMP_REG, annotation);
+}
+
+
+void Coupling_generator::do_external_coupling_generation(int API_id, const char *annotation)
+{
+	int i, j, k, num_comps = all_comp_fullnames_for_coupling_generation.size(), *temp_int_array;
 	std::vector<Comp_comm_group_mgt_node*> all_comp_nodes, loaded_comp_nodes;
 	Comp_comm_group_mgt_node *temp_comp_node, *local_comp_node, *existing_comp_node;
 	char *local_temp_array_buffer = NULL, *remote_temp_array_buffer = NULL;
-	long local_current_array_buffer_size, local_max_array_buffer_size, remote_current_array_buffer_size, remote_max_array_buffer_size;
+	long local_current_array_buffer_size, local_max_array_buffer_size, remote_current_array_buffer_size, remote_max_array_buffer_size, temp_array_size, str_size;
 	int current_connection_id, max_connection_id, remote_connection_id;
 	MPI_Request request_send, request_recv;
 	MPI_Status status;
@@ -1234,21 +1364,14 @@ void Coupling_generator::do_external_coupling_generation(const char *annotation)
 	bool is_current_proc_in_union_comm = false;
 	int current_proc_id_in_union_comm, size_union_comm;
 	std::vector<int> proc_global_ids_in_union_comm, proc_global_ids_in_current_comm;
+	std::vector<const char*> temp_all_comp_fullnames_for_coupling_generation;
 
 
-	for (i = 0; i < num_comps; i ++) {
-		k = 0;
-		for (j = 1; j < all_comp_fullnames_for_coupling_generation.size(); j ++)
-			if (strcmp(all_comp_fullnames_for_coupling_generation[k], all_comp_fullnames_for_coupling_generation[j]) > 0)
-				k = j;
-		temp_all_comp_fullnames_for_coupling_generation.push_back(all_comp_fullnames_for_coupling_generation[k]);
-		all_comp_fullnames_for_coupling_generation.erase(all_comp_fullnames_for_coupling_generation.begin()+k);
+	sort_comp_full_names(all_comp_fullnames_for_coupling_generation, &individual_or_family_generation);
+	temp_int_array = new int [individual_or_family_generation.size()];
+	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
+		temp_int_array[i] = individual_or_family_generation[i];
 	}
-	EXECUTION_REPORT(REPORT_ERROR, -1, num_comps == temp_all_comp_fullnames_for_coupling_generation.size() && all_comp_fullnames_for_coupling_generation.size() == 0, "Software error in Coupling_generator::do_external_coupling_generation");
-	
-	for (i = 0; i < temp_all_comp_fullnames_for_coupling_generation.size(); i ++)
-		all_comp_fullnames_for_coupling_generation.push_back(temp_all_comp_fullnames_for_coupling_generation[i]);
-
 
 	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
 		if (comp_comm_group_mgt_mgr->search_global_node(all_comp_fullnames_for_coupling_generation[i]) != NULL)
@@ -1282,7 +1405,8 @@ void Coupling_generator::do_external_coupling_generation(const char *annotation)
 	EXECUTION_REPORT(REPORT_ERROR, -1, all_comp_nodes.size() == all_comp_fullnames_for_coupling_generation.size(), "Software error in Coupling_generator::do_external_coupling_generation: wrong all_comp_nodes.size()");
 
 	if (all_comp_fullnames_for_coupling_generation.size() == 1) {
-		generate_coupling_procedures_common(all_comp_nodes[0]->get_comm_group(), false);
+		generate_coupling_procedures_internal(all_comp_nodes[0]->get_comp_id(), individual_or_family_generation[0] == 2, annotation);
+		delete [] temp_int_array;
 		return;
 	}	
 
@@ -1292,7 +1416,8 @@ void Coupling_generator::do_external_coupling_generation(const char *annotation)
 	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
 		if (all_comp_nodes[i]->get_current_proc_local_id() >= 0) {
 			EXECUTION_REPORT_LOG(REPORT_LOG, all_comp_nodes[i]->get_comp_id(), true, "In the flowchart of executing the API \"CCPL_do_external_coupling_generation\" at the model code with the annotation \"%s\": before checking consistency of the parameters between all processes of this component model. Deadlock may happen if not all processes of this component model calls this API at the same time", annotation);
-			check_API_parameter_data_array(all_comp_nodes[i]->get_comp_id(), API_ID_COUPLING_GEN_EXTERNAL, all_comp_nodes[i]->get_comm_group(), "coupling generation", local_current_array_buffer_size, sizeof(char), local_temp_array_buffer, "comps_full_names", annotation);
+			check_API_parameter_data_array(all_comp_nodes[i]->get_comp_id(), API_id, all_comp_nodes[i]->get_comm_group(), "coupling generation", local_current_array_buffer_size, sizeof(char), local_temp_array_buffer, "comps_full_names", annotation);
+			check_API_parameter_data_array(all_comp_nodes[i]->get_comp_id(), API_id, all_comp_nodes[i]->get_comm_group(), "coupling generation", individual_or_family_generation.size(), sizeof(int), (const char*) temp_int_array, "individual_or_familiy", annotation);
 			coupling_generator->synchronize_latest_connection_id(all_comp_nodes[i]->get_comm_group());
 			EXECUTION_REPORT_LOG(REPORT_LOG, all_comp_nodes[i]->get_comp_id(), true, "In the flowchart of executing the API \"CCPL_do_external_coupling_generation\" at the model code with the annotation \"%s\": after checking consistency of the parameters between all processes of this component model. Deadlock may happen if not all processes of this component model calls this API at the same time", annotation);			
 		}
@@ -1332,14 +1457,28 @@ void Coupling_generator::do_external_coupling_generation(const char *annotation)
 	for (i = 1; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
 		if (all_comp_nodes[0]->get_current_proc_local_id() != -1 || all_comp_nodes[i]->get_current_proc_local_id() != -1) {
 			transfer_array_from_one_comp_to_another(all_comp_nodes[0]->get_current_proc_local_id(), all_comp_nodes[0]->get_local_proc_global_id(0), all_comp_nodes[i]->get_current_proc_local_id(), all_comp_nodes[i]->get_local_proc_global_id(0), all_comp_nodes[i]->get_comm_group(), &remote_temp_array_buffer, remote_current_array_buffer_size);
+			temp_array_size = individual_or_family_generation.size() * sizeof(int);
+			transfer_array_from_one_comp_to_another(all_comp_nodes[0]->get_current_proc_local_id(), all_comp_nodes[0]->get_local_proc_global_id(0), all_comp_nodes[i]->get_current_proc_local_id(), all_comp_nodes[i]->get_local_proc_global_id(0), all_comp_nodes[i]->get_comm_group(), (char**)(&temp_int_array), temp_array_size);
 			if (all_comp_nodes[i]->get_current_proc_local_id() != -1) {
-				EXECUTION_REPORT(REPORT_ERROR, all_comp_nodes[i]->get_comp_id(), remote_current_array_buffer_size == local_current_array_buffer_size, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the full names of component models specified through the input parameters are not consistency between the component models \"%s\" and \"%s\". Please check the model code with the annotation \:%s\"", all_comp_fullnames_for_coupling_generation[i], all_comp_fullnames_for_coupling_generation[0], annotation);
+				EXECUTION_REPORT(REPORT_ERROR, all_comp_nodes[i]->get_comp_id(), remote_current_array_buffer_size == local_current_array_buffer_size, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the full names of component models specified through the input parameters are not consistency between the component models \"%s\" and \"%s\". Please check the model code with the annotation \"%s\"", all_comp_fullnames_for_coupling_generation[i], all_comp_fullnames_for_coupling_generation[0], annotation);
 				for (j = 0; j < local_current_array_buffer_size; j ++)
 					if (local_temp_array_buffer[j] != remote_temp_array_buffer[j])
 						break;
-				EXECUTION_REPORT(REPORT_ERROR, all_comp_nodes[i]->get_comp_id(), j == local_current_array_buffer_size, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the full names of component models specified through the input parameters are not consistency between the component models \"%s\" and \"%s\". Please check the model code with the annotation \:%s\"", all_comp_fullnames_for_coupling_generation[i], all_comp_fullnames_for_coupling_generation[0], annotation);
+				EXECUTION_REPORT(REPORT_ERROR, all_comp_nodes[i]->get_comp_id(), j == local_current_array_buffer_size, "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the full names of component models specified through the input parameters are not consistency between the component models \"%s\" and \"%s\". Please check the model code with the annotation \"%s\"", all_comp_fullnames_for_coupling_generation[i], all_comp_fullnames_for_coupling_generation[0], annotation);
+				for (j = 0; j < individual_or_family_generation.size(); j ++)	
+					if (individual_or_family_generation[j] != temp_int_array[j])
+						break;
+				EXECUTION_REPORT(REPORT_ERROR, all_comp_nodes[i]->get_comp_id(), j == individual_or_family_generation.size(), "ERROR happens when calling the API \"CCPL_do_external_coupling_generation\": the values of the parameter \"individual_or_family\" are not consistency between the component models \"%s\" and \"%s\". Please check the model code with the annotation \"%s\"", all_comp_fullnames_for_coupling_generation[i], all_comp_fullnames_for_coupling_generation[0], annotation);
 			}
 		}
+	if (local_temp_array_buffer != NULL) {
+		delete [] local_temp_array_buffer;
+		local_temp_array_buffer = NULL;
+	}
+	if (remote_temp_array_buffer != NULL) {
+		delete [] remote_temp_array_buffer;
+		remote_temp_array_buffer = NULL;
+	}	
 
 	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
 		current_connection_id = coupling_generator->apply_connection_id();
@@ -1379,15 +1518,55 @@ void Coupling_generator::do_external_coupling_generation(const char *annotation)
 	}
 
 	MPI_Comm_size(union_comm, &size_union_comm);
+	MPI_Comm_rank(union_comm, &current_proc_id_in_union_comm);
 	EXECUTION_REPORT_LOG(REPORT_LOG, -1, true, "Finish generating the union comm (%d) for external coupling generation", size_union_comm);
-	
-	generate_coupling_procedures_common(union_comm, false);
+
+	remote_max_array_buffer_size = 0; 
+	remote_current_array_buffer_size = 0;
+	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++) {
+		if (all_comp_nodes[i]->get_current_proc_local_id() != -1) {
+			if (individual_or_family_generation[i] == 2)
+				all_comp_nodes[i]->get_all_descendant_real_comp_fullnames(all_comp_nodes[i]->get_comp_id(), temp_all_comp_fullnames_for_coupling_generation, &local_temp_array_buffer, local_max_array_buffer_size, local_current_array_buffer_size);
+			else temp_all_comp_fullnames_for_coupling_generation.push_back(strdup(all_comp_fullnames_for_coupling_generation[i]));
+			if (all_comp_nodes[i]->get_current_proc_local_id() == 0)
+				for (j = 0; j < temp_all_comp_fullnames_for_coupling_generation.size(); j ++)
+					dump_string(temp_all_comp_fullnames_for_coupling_generation[j], -1, &remote_temp_array_buffer, remote_max_array_buffer_size, remote_current_array_buffer_size);
+			for (j = 0; j < temp_all_comp_fullnames_for_coupling_generation.size(); j ++)
+				delete [] temp_all_comp_fullnames_for_coupling_generation[j];
+			temp_all_comp_fullnames_for_coupling_generation.clear();
+		}
+	}
+	local_temp_array_buffer = NULL;
+	local_current_array_buffer_size = 0;
+	local_max_array_buffer_size = 0;
+	gather_array_in_one_comp(size_union_comm, current_proc_id_in_union_comm, remote_temp_array_buffer, remote_current_array_buffer_size, sizeof(char), NULL, (void**)(&local_temp_array_buffer), local_current_array_buffer_size, union_comm);
+	bcast_array_in_one_comp(current_proc_id_in_union_comm, &local_temp_array_buffer, local_current_array_buffer_size, union_comm);
+	for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
+		delete [] all_comp_fullnames_for_coupling_generation[i];
+	all_comp_fullnames_for_coupling_generation.clear();
+	individual_or_family_generation.clear();
+	while (local_current_array_buffer_size > 0) {
+		const char *full_name = load_string(NULL, str_size, -1, local_temp_array_buffer, local_current_array_buffer_size, NULL);
+		add_comp_for_external_coupling_generation(full_name, 1, annotation);
+	}	
+	EXECUTION_REPORT(REPORT_ERROR, -1, local_current_array_buffer_size == 0, "Software error in Coupling_generator::do_external_coupling_generation");
+	if (local_temp_array_buffer != NULL)
+		delete [] local_temp_array_buffer;
+	if (remote_temp_array_buffer != NULL)
+		delete [] remote_temp_array_buffer;
+
+	if (current_proc_id_in_union_comm == 0) {		
+		for (int i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
+			printf("comp for external generation %s at proc %d\n", all_comp_fullnames_for_coupling_generation[i], current_proc_id_in_union_comm);
+	}
+	generate_coupling_procedures_common(API_id, union_comm, false, annotation);
 
 	clear();
+	delete [] temp_int_array;
 }
 
 
-void Coupling_generator::load_comps_full_names_from_config_file(int comp_id, const char *keyword, int size_comps_full_names, int *num_comps, const char *annotation)
+void Coupling_generator::load_comps_full_names_from_config_file(int comp_id, const char *keyword, int size_comps_full_names, int size_individual_or_family, int *num_comps, const char *annotation)
 {
 	char XML_file_name[NAME_STR_SIZE];
 	const char *current_comp_full_name = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Coupling_generator::load_comps_full_names_from_config_file")->get_full_name();
@@ -1406,6 +1585,8 @@ void Coupling_generator::load_comps_full_names_from_config_file(int comp_id, con
 	TiXmlElement *root_XML_element, *XML_element, *detailed_XML_element;
 	TiXmlNode *root_XML_element_node = get_XML_first_child_of_unique_root(comp_id, XML_file_name, XML_file), *XML_element_node = NULL, *detailed_XML_element_node = NULL;
 	for (; root_XML_element_node != NULL; root_XML_element_node = root_XML_element_node->NextSibling()) {
+		if (root_XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		root_XML_element = root_XML_element_node->ToElement();
 		if (words_are_the_same(root_XML_element->Value(),"component_full_names_sets"))
 			break;
@@ -1430,9 +1611,18 @@ void Coupling_generator::load_comps_full_names_from_config_file(int comp_id, con
 		if (temp_full_name != NULL) {
 			for (i = 0; i < all_comp_fullnames_for_coupling_generation.size(); i ++)
 				if (words_are_the_same(temp_full_name, all_comp_fullnames_for_coupling_generation[i]))
-					break;
+					break;			
 			if (i == all_comp_fullnames_for_coupling_generation.size())
 				all_comp_fullnames_for_coupling_generation.push_back(strdup(temp_full_name));
+			else EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "ERROR happens when calling the API \"CCPL_get_configurable_comps_full_names\": when loading the set of component models corresponding to the keyword \"%s\" from the XML file \"%s\", there are more than one entry of the component model \"%s\". Please check the XML file around the line number %d", keyword, XML_file_name, temp_full_name, line_number);
+			const char *individual_or_family = detailed_XML_element->Attribute("individual_or_family", &line_number);
+			int value_individual_or_family = 1;
+			if (individual_or_family != NULL) {
+				EXECUTION_REPORT(REPORT_ERROR, comp_id, words_are_the_same(individual_or_family, "individual") || words_are_the_same(individual_or_family, "family"), "ERROR happens when calling the API \"CCPL_get_configurable_comps_full_names\": the value of \"individual_or_family\" in the XML file \"%s\" must be \"individual\" or \"family\". Please verify the XML file at line %d", XML_file_name, line_number);
+				if (words_are_the_same(individual_or_family, "family"))
+					value_individual_or_family = 2;
+			}
+			individual_or_family_generation.push_back(value_individual_or_family);
 		}
 	}
 
@@ -1447,12 +1637,14 @@ void Coupling_generator::load_comps_full_names_from_config_file(int comp_id, con
 	*num_comps = all_comp_fullnames_for_coupling_generation.size();
 
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, size_comps_full_names >= *num_comps, "ERROR happens when calling the API \"CCPL_get_configurable_comps_full_names\": the array size of the input parameter \"comps_full_names\" (%d) is smaller than the number component models specified in the XML file \"%s\" (%d). Please verify the model code with the annotation \"%s\" or the configuration file.", size_comps_full_names, XML_file_name, *num_comps, annotation);
+	if (size_individual_or_family != -1)
+		EXECUTION_REPORT(REPORT_ERROR, comp_id, size_individual_or_family >= *num_comps, "ERROR happens when calling the API \"CCPL_get_configurable_comps_full_names\": the array size of the input parameter \"individual_or_family\" (%d) is smaller than the number component models specified in the XML file \"%s\" (%d). Please verify the model code with the annotation \"%s\" or the configuration file.", size_comps_full_names, XML_file_name, *num_comps, annotation);
 	
 	delete XML_file;
 }
 
 
-void Coupling_generator::get_one_comp_full_name(int comp_id, int str_size, int index, char *comp_full_name, const char *annotation)
+void Coupling_generator::get_one_comp_full_name(int comp_id, int str_size, int index, char *comp_full_name, int *local_individual_or_family, const char *annotation)
 {
 	char XML_file_name[NAME_STR_SIZE];
 
@@ -1460,6 +1652,7 @@ void Coupling_generator::get_one_comp_full_name(int comp_id, int str_size, int i
 	sprintf(XML_file_name, "%s/all/coupling_connections/%s.coupling_connections.xml", comp_comm_group_mgt_mgr->get_config_root_dir(), comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Coupling_generator::load_comps_full_names_from_config_file")->get_full_name());
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, str_size >= strlen(all_comp_fullnames_for_coupling_generation[index]), "Error happens when calling the API \"CCPL_get_configurable_comps_full_names\": the string length of the input parameter \"comps_full_names\" (%d) is smaller than the length of the full name of a component model (%s) that is loaded from the XML file \"%s\". Please verify the model code with the annotation \"%s\".", str_size, all_comp_fullnames_for_coupling_generation[index], XML_file_name, annotation);
 	strncpy(comp_full_name, all_comp_fullnames_for_coupling_generation[index], strlen(all_comp_fullnames_for_coupling_generation[index]));
+	*local_individual_or_family = individual_or_family_generation[index];
 	for (int i = strlen(all_comp_fullnames_for_coupling_generation[index]); i < str_size; i ++)
 		comp_full_name[i] = ' ';
 }

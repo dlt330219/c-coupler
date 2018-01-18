@@ -54,9 +54,6 @@ Original_grid_info::Original_grid_info(int comp_id, int grid_id, const char *gri
 			int num_leaf_grids;
 			H2D_sub_CoR_grid->get_leaf_grids(&num_leaf_grids, leaf_grids, H2D_sub_CoR_grid);
 			EXECUTION_REPORT(REPORT_ERROR, -1, words_are_the_same(leaf_grids[0]->get_coord_label(), COORD_LABEL_LON), "software error in Original_grid_info::Original_grid_info");
-			if (leaf_grids[0]->get_grid_cyclic())					
-				netcdf_file_object->put_global_attr("cyclic_or_acyclic", "cyclic", DATA_TYPE_STRING, DATA_TYPE_STRING, -1);
-			else netcdf_file_object->put_global_attr("cyclic_or_acyclic", "acyclic", DATA_TYPE_STRING, DATA_TYPE_STRING, -1);
 			double temp_double = H2D_sub_CoR_grid->get_boundary_min_lon();
 			netcdf_file_object->put_global_attr("min_lon", &temp_double, DATA_TYPE_DOUBLE, DATA_TYPE_DOUBLE, 1);
 			temp_double = H2D_sub_CoR_grid->get_boundary_max_lon();
@@ -65,7 +62,15 @@ Original_grid_info::Original_grid_info(int comp_id, int grid_id, const char *gri
 			netcdf_file_object->put_global_attr("min_lat", &temp_double, DATA_TYPE_DOUBLE, DATA_TYPE_DOUBLE, 1);
 			temp_double = H2D_sub_CoR_grid->get_boundary_max_lat();
 			netcdf_file_object->put_global_attr("max_lat", &temp_double, DATA_TYPE_DOUBLE, DATA_TYPE_DOUBLE, 1);
+			if (leaf_grids[0]->get_grid_cyclic())					
+				netcdf_file_object->put_global_attr("cyclic_or_acyclic", "cyclic", DATA_TYPE_STRING, DATA_TYPE_STRING, -1);
+			else netcdf_file_object->put_global_attr("cyclic_or_acyclic", "acyclic", DATA_TYPE_STRING, DATA_TYPE_STRING, -1);			
 			delete netcdf_file_object;
+			char status_file_name[NAME_STR_SIZE];
+			sprintf(status_file_name, "%s/%s@%s.nc.end", comp_comm_group_mgt_mgr->get_comps_ending_config_status_dir(), grid_name, comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "Original_grid_info")->get_full_name());
+			FILE *status_file = fopen(status_file_name, "w+");
+			EXECUTION_REPORT(REPORT_ERROR, -1, status_file != NULL, "Software error in Comp_comm_group_mgt_node::merge_comp_comm_info: configuration ending status file cannot be created: %s", status_file_name);
+			fclose(status_file);
 		}
 		MPI_Barrier(comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id, "Original_grid_info::Original_grid_info"));
 	}
@@ -273,7 +278,7 @@ void Original_grid_mgt::initialize_CoR_grids()
 	if (CoR_grids != NULL)
 		return;
 	
-	sprintf(CoR_script_name, "%s/CCPL_grid.cor", comp_comm_group_mgt_mgr->get_first_active_comp_config_dir());
+	sprintf(CoR_script_name, "%s/CCPL_grid.cor", comp_comm_group_mgt_mgr->get_root_comp_config_dir());
 	FILE *fp = fopen(CoR_script_name, "r");
 	if (fp == NULL)
 		CoR_script_name[0] = '\0';
@@ -281,7 +286,7 @@ void Original_grid_mgt::initialize_CoR_grids()
 	if (strlen(CoR_script_name) != 0) {
 		char current_dir[NAME_STR_SIZE], grids_dir[NAME_STR_SIZE];
 		EXECUTION_REPORT(REPORT_ERROR, -1, getcwd(current_dir,NAME_STR_SIZE) != NULL, "Cannot get the current working directory for running the model");
-		sprintf(grids_dir, "%s/grids_weights", comp_comm_group_mgt_mgr->get_first_active_comp_config_dir());
+		sprintf(grids_dir, "%s/grids_weights", comp_comm_group_mgt_mgr->get_root_comp_config_dir());
 		EXECUTION_REPORT(REPORT_ERROR, -1, chdir(grids_dir) == 0, "Fail to access the directory of the CoR grid data files: \"%s\". Please verify.", grids_dir);
 		CoR_grids = new Remap_mgt(CoR_script_name);
 		chdir(current_dir);
@@ -343,10 +348,10 @@ void Original_grid_mgt::check_for_grid_definition(int comp_id, const char *grid_
 
 int Original_grid_mgt::register_H2D_grid_via_comp(int comp_id, const char *grid_name, const char *annotation)
 {
-	char XML_file_name[NAME_STR_SIZE], nc_file_name[NAME_STR_SIZE];
+	char XML_file_name[NAME_STR_SIZE], nc_file_name[NAME_STR_SIZE], status_file_name[NAME_STR_SIZE];
 	const char *another_comp_full_name = NULL, *another_comp_grid_name = NULL;
 	int line_number;
-
+	
 
 	sprintf(XML_file_name, "%s/all/coupling_connections/%s.coupling_connections.xml", comp_comm_group_mgt_mgr->get_config_root_dir(), comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in register_H2D_grid_via_comp")->get_full_name());
 	TiXmlDocument *XML_file = open_XML_file_to_read(comp_id, XML_file_name, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"in register_H2D_grid_via_comp"), false);
@@ -355,12 +360,16 @@ int Original_grid_mgt::register_H2D_grid_via_comp(int comp_id, const char *grid_
 	TiXmlElement *root_XML_element;
 	TiXmlNode *root_XML_element_node = get_XML_first_child_of_unique_root(comp_id, XML_file_name, XML_file);
 	for (; root_XML_element_node != NULL; root_XML_element_node = root_XML_element_node->NextSibling()) {
+		if (root_XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		root_XML_element = root_XML_element_node->ToElement();
 		if (words_are_the_same(root_XML_element->Value(),"local_grids"))
 			break;
 	}
 	if (root_XML_element_node != NULL) {
 		for (TiXmlNode *grid_XML_element_node = root_XML_element->FirstChild(); grid_XML_element_node != NULL; grid_XML_element_node = grid_XML_element_node->NextSibling()) {
+			if (grid_XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+				continue;
 			TiXmlElement *grid_XML_element = grid_XML_element_node->ToElement();
 			const char *xml_grid_name = get_XML_attribute(comp_id, 80, grid_XML_element, "local_grid_name", XML_file_name, line_number, "grid name of the current component", "the coupling connection configuration file");
 			if (words_are_the_same(xml_grid_name, grid_name)) {
@@ -374,22 +383,17 @@ int Original_grid_mgt::register_H2D_grid_via_comp(int comp_id, const char *grid_
 
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, another_comp_full_name != NULL && another_comp_grid_name != NULL, "Error happens when calling the C-Coupler API \"CCPL_register_H2D_grid_from_another_component\" to register an H2D grid \"%s\": the coupling connection configuration file (\"%s\") does not contain the information for this grid. The API call is at the model code with the annotation \"%s\". ", grid_name, XML_file_name, annotation);
 	sprintf(nc_file_name, "%s/%s@%s.nc", comp_comm_group_mgt_mgr->get_internal_H2D_grids_dir(), another_comp_grid_name, another_comp_full_name);
+	sprintf(status_file_name, "%s/%s@%s.nc.end", comp_comm_group_mgt_mgr->get_comps_ending_config_status_dir(), another_comp_grid_name, another_comp_full_name);
 	EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Wait to read NetCDF file \"%s\" to register H2D grid \"%s\" based on the grid \"%s\" of remote component \"%s\". Dead wait will be encounted if the full name of the remote component is wrong. So please make sure the full name of the remote component is correct in the the coupling connection configuration file (\"%s\")", nc_file_name, grid_name, another_comp_grid_name, another_comp_full_name, XML_file_name);
 	if (comp_comm_group_mgt_mgr->get_current_proc_id_in_comp(comp_id, "in register_H2D_grid_via_comp") == 0) {
 		while (true) {
-			sleep(1);
-			int ncfile_id;
-			int rcode = nc_open(nc_file_name, NC_NOWRITE, &ncfile_id);
-			if (rcode != NC_NOERR) {
+			FILE *status_file = fopen(status_file_name, "r");
+			if (status_file == NULL) {
 				if (comp_comm_group_mgt_mgr->has_comp_ended_configuration(another_comp_full_name))
 					EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "Fail to read NetCDF file \"%s\" to register H2D grid \"%s\": remote component \"%s\" has ended its coupling configuration stage without registering the required grid (\"%s\") before. Please check the configuration file (\"%s\") or the corresponding model code.", nc_file_name, grid_name, another_comp_full_name, another_comp_grid_name, XML_file_name);
 				continue;
 			}
-			char cyclic_or_acyclic[NAME_STR_SIZE];
-			rcode = nc_get_att_text(ncfile_id, NC_GLOBAL, "cyclic_or_acyclic", cyclic_or_acyclic);
-			nc_close(ncfile_id);
-			if (rcode != NC_NOERR)
-				continue;
+			fclose(status_file);
 			break;
 		}
 	}
@@ -441,12 +445,16 @@ void Original_grid_mgt::common_checking_for_H2D_registration_via_data(int comp_i
 	transform_datatype_of_arrays(min_lat, (char*)(&min_lat_value), data_type, DATA_TYPE_DOUBLE, 1);
 	transform_datatype_of_arrays(max_lat, (char*)(&max_lat_value), data_type, DATA_TYPE_DOUBLE, 1);
 
-	EXECUTION_REPORT(REPORT_ERROR, comp_id, max_lat_value > min_lat_value, "Error happens when registering an H2D grid \"%s\" through API \"%s\": \"min_lat\" is not smaller than \"max_lat\". Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
+	EXECUTION_REPORT(REPORT_ERROR, comp_id, max_lat_value > min_lat_value, "Error happens when registering an H2D grid \"%s\" through API \"%s\": \"min_lat\" (%lf) is not smaller than \"max_lat\" (%lf). Please check the model code related to the annotation \"%s\".", grid_name, API_label, min_lat_value, max_lat_value, annotation);
 	if (words_are_the_same(coord_unit, COORD_UNIT_DEGREES)) {
 		if (words_are_the_same(cyclic_or_acyclic, "acyclic")) {
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) min_lon, 1, (double) -360.0*eps, (double) 360.0*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"min_lon\" is wrong (not between -360 and 360). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) max_lon, 1, (double) -360.0*eps, (double) 360.0*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"max_lon\" is wrong (not between -360 and 360). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, fabs(max_lon_value-min_lon_value) <= ((double)360.0)*eps, "Error happens when registering an H2D grid \"%s\" through API \"%s\": the difference between \"min_lon\" and \"max_lon\" (%lf) is wrong (not between -360 and 360). Please check the model code related to the annotation \"%s\".", grid_name, API_label, fabs(max_lon_value-min_lon_value), annotation);
+		}
+		else {
+			min_lon_value = -360;
+			max_lon_value = 360;
 		}
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) min_lat, 1, (double) -90.0*eps, (double) 90.0*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"min_lat\" is wrong (not between -90 and 90). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) max_lat, 1, (double) -90.0*eps, (double) 90.0*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"max_lat\" is wrong (not between -90 and 90). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
@@ -457,7 +465,11 @@ void Original_grid_mgt::common_checking_for_H2D_registration_via_data(int comp_i
 		if (words_are_the_same(cyclic_or_acyclic, "acyclic")) {
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) min_lon, 1, -((double)3.1416)*2*eps, ((double)3.1416)*2*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"min_lon\" are wrong (not between -2PI and 2PI). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) max_lon, 1, -((double)3.1416)*2*eps, ((double)3.1416)*2*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"max_lon\" are wrong (not between -2PI and 2PI). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
-			EXECUTION_REPORT(REPORT_ERROR, comp_id, fabs(max_lon-min_lon) <= ((double)3.1416)*2*eps, "Error happens when registering an H2D grid \"%s\" through API \"%s\": the difference between \"min_lon\" and \"max_lon\" is wrong (not between -2PI and 2PI). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);	
+			EXECUTION_REPORT(REPORT_ERROR, comp_id, fabs(max_lon_value-min_lon_value) <= ((double)3.1416)*2*eps, "Error happens when registering an H2D grid \"%s\" through API \"%s\": the difference between \"min_lon\" and \"max_lon\" is wrong (not between -2PI and 2PI). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);	
+		}
+		else {
+			min_lon_value = -((double)3.1416)*2;
+			max_lon_value = -((double)3.1416)*2;
 		}
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) min_lat, 1, -((double)3.1416)/2*eps, ((double)3.1416)/2*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"min_lat\" are wrong (not between -PI/2 and PI/2). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, are_array_values_between_boundaries(data_type, (double*) max_lat, 1, -((double)3.1416)/2*eps, ((double)3.1416)/2*eps, (double) NULL_COORD_VALUE, false), "Error happens when registering an H2D grid \"%s\" through API \"%s\": the value of the parameter \"max_lat\" are wrong (not between -PI/2 and PI/2). Please check the model code related to the annotation \"%s\".", grid_name, API_label, annotation);
@@ -873,7 +885,7 @@ int Original_grid_mgt::get_CoR_defined_grid(int comp_id, const char *grid_name, 
 	char CoR_script_file_name[NAME_STR_SIZE];
 
 	
-	sprintf(CoR_script_file_name, "%s/CCPL_grid.cor", comp_comm_group_mgt_mgr->get_first_active_comp_config_dir());
+	sprintf(CoR_script_file_name, "%s/CCPL_grid.cor", comp_comm_group_mgt_mgr->get_root_comp_config_dir());
 	original_CoR_grid = remap_grid_manager->search_remap_grid_with_grid_name(CoR_grid_name);
 	if (original_CoR_grid == NULL)
 		if (strlen(CoR_script_name) > 0)
@@ -883,6 +895,8 @@ int Original_grid_mgt::get_CoR_defined_grid(int comp_id, const char *grid_name, 
 				              grid_name, CoR_grid_name, CoR_script_file_name);
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, original_CoR_grid->format_sub_grids(original_CoR_grid), "Please modify the definition of grid \"%s\" in the CoR script \"%s\". We propose to order the dimensions of the grid into the order such as lon, lat, level and time");
 	original_CoR_grid->end_grid_definition_stage(NULL);
+	if (original_CoR_grid->get_is_sphere_grid() && original_CoR_grid->get_boundary_min_lon() == NULL_COORD_VALUE)
+		original_CoR_grid->set_grid_boundary(-360.0, 360.0, -90.0, 90.0);
 	original_grid = new Original_grid_info(comp_id, original_grids.size()|TYPE_GRID_LOCAL_ID_PREFIX, grid_name, annotation, original_CoR_grid, true);
 	original_grids.push_back(original_grid);
 	if (original_grid->get_H2D_sub_CoR_grid() != NULL) {

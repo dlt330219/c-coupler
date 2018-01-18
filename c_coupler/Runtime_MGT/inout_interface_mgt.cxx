@@ -12,13 +12,20 @@
 #include "runtime_cumulate_average_algorithm.h"
 #include "runtime_datatype_transformer.h"
 #include "inout_interface_mgt.h"
+#include <unistd.h>
+#include <sys/stat.h>
+#include <sys/types.h>
+#include <dirent.h>
 
 
-Connection_field_time_info::Connection_field_time_info(Inout_interface *inout_interface, Coupling_timer *timer, int time_step_in_second, int inst_or_aver)
+Connection_field_time_info::Connection_field_time_info(Inout_interface *inout_interface, Coupling_timer *timer, int time_step_in_second, int current_year, int current_month, int current_day, int current_second, int inst_or_aver)
 {
 	this->inout_interface = inout_interface;
 	this->timer = timer;
-	components_time_mgrs->get_time_mgr(inout_interface->get_comp_id())->get_current_time(current_year, current_month, current_day, current_second, 0, "CCPL internal");
+	this->current_year = current_year;
+	this->current_month = current_month;
+	this->current_day = current_day;
+	this->current_second = current_second;
 	current_num_elapsed_days = components_time_mgrs->get_time_mgr(inout_interface->get_comp_id())->get_current_num_elapsed_day();
 	this->time_step_in_second = time_step_in_second;
 	this->inst_or_aver = inst_or_aver;
@@ -88,7 +95,7 @@ Connection_coupling_procedure::Connection_coupling_procedure(Inout_interface *in
 	
 	this->inout_interface = inout_interface;
 	this->coupling_connection = coupling_connection; 
-
+	coupling_connections_dumped = false;
 
 	for (int i = 0; i < coupling_connection->fields_name.size(); i ++)
 		for (int j=i+1; j < coupling_connection->fields_name.size(); j ++)
@@ -96,8 +103,8 @@ Connection_coupling_procedure::Connection_coupling_procedure(Inout_interface *in
 			                 "Software error in Connection_coupling_procedure::Connection_coupling_procedure: duplicated field name \"%s\" in a coonection", 
 			                 coupling_connection->fields_name[i]);
 
-	fields_time_info_src = new Connection_field_time_info(inout_interface, coupling_connection->src_timer, coupling_connection->src_time_step_in_second, -1);
-	fields_time_info_dst = new Connection_field_time_info(inout_interface, coupling_connection->dst_timer, coupling_connection->dst_time_step_in_second, coupling_connection->dst_inst_or_aver);
+	fields_time_info_src = new Connection_field_time_info(inout_interface, coupling_connection->src_timer, coupling_connection->src_time_step_in_second, coupling_connection->src_current_year, coupling_connection->src_current_month, coupling_connection->src_current_day, coupling_connection->src_current_second, -1);
+	fields_time_info_dst = new Connection_field_time_info(inout_interface, coupling_connection->dst_timer, coupling_connection->dst_time_step_in_second, coupling_connection->dst_current_year, coupling_connection->dst_current_month, coupling_connection->dst_current_day, coupling_connection->dst_current_second, coupling_connection->dst_inst_or_aver);
 	if (inout_interface->get_import_or_export_or_remap() == 0)
 		fields_time_info_src->reset_last_timer_info();
 	else fields_time_info_dst->reset_last_timer_info();
@@ -196,6 +203,9 @@ Connection_coupling_procedure::Connection_coupling_procedure(Inout_interface *in
 			runtime_inter_averaging_algorithm[i] = new Runtime_cumulate_average_algorithm(last_field_instance, fields_mem_registered[i]);
 		}
 	}
+	
+	if (inout_interface->get_import_or_export_or_remap() == 0)
+		comp_comm_group_mgt_mgr->get_global_node_of_local_comp(inout_interface->get_comp_id(),"Connection_coupling_procedure::Connection_coupling_procedure")->update_min_remote_lag_seconds(fields_time_info_dst->lag_seconds);
 }
 
 
@@ -225,54 +235,58 @@ Connection_coupling_procedure::~Connection_coupling_procedure()
 void Connection_coupling_procedure::execute(bool bypass_timer, int *field_update_status, const char *annotation)
 {
 	Time_mgt *time_mgr = components_time_mgrs->get_time_mgr(inout_interface->get_comp_id());
-	Connection_field_time_info *local_fields_time_info, *remote_fields_time_info;
 	int lag_seconds;
+
 
 	finish_status = false;
 	transfer_data = false;
-	
-	if (inout_interface->get_import_or_export_or_remap() == 0) {
-		local_fields_time_info = fields_time_info_dst;
-		remote_fields_time_info = fields_time_info_src;
-		lag_seconds = local_fields_time_info->lag_seconds;
-	}
-	else {
-		local_fields_time_info = fields_time_info_src;
-		remote_fields_time_info = fields_time_info_dst;
-		lag_seconds = -remote_fields_time_info->lag_seconds;
-	}
-	time_mgr->get_current_time(local_fields_time_info->current_year, local_fields_time_info->current_month, local_fields_time_info->current_day, local_fields_time_info->current_second, 0, "CCPL internal");
-	local_fields_time_info->current_num_elapsed_days = time_mgr->get_current_num_elapsed_day();  
-	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, local_fields_time_info->inout_interface->get_comp_id(), !((local_fields_time_info->last_timer_num_elapsed_days != -1)) || ((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second >= ((long)local_fields_time_info->last_timer_num_elapsed_days)*100000+local_fields_time_info->last_timer_second,
-	                 "Software error in Connection_coupling_procedure::execute: current time is earlier than last timer time");
-	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, local_fields_time_info->inout_interface->get_comp_id(), ((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second <= ((long)local_fields_time_info->next_timer_num_elapsed_days)*100000+local_fields_time_info->next_timer_second,
-	                 "Please make sure that the import/export interface \"%s\" is called when the timer of any field is on. Please check the model code with the annotation \"%s\"", 
-	                 local_fields_time_info->inout_interface->get_interface_name(), annotation_mgr->get_annotation(local_fields_time_info->inout_interface->get_interface_id(), "registering interface"));
-	if (time_mgr->is_timer_on(local_fields_time_info->timer->get_frequency_unit(), local_fields_time_info->timer->get_frequency_count(), local_fields_time_info->timer->get_local_lag_count())) {
-		if (((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second == ((long)local_fields_time_info->next_timer_num_elapsed_days)*100000+local_fields_time_info->next_timer_second) {
-			local_fields_time_info->last_timer_num_elapsed_days = local_fields_time_info->next_timer_num_elapsed_days;
-			local_fields_time_info->last_timer_second = local_fields_time_info->next_timer_second;
-			local_fields_time_info->get_time_of_next_timer_on(true);
+
+	if (!bypass_timer) {	
+		Connection_field_time_info *local_fields_time_info, *remote_fields_time_info;		
+		if (inout_interface->get_import_or_export_or_remap() == 0) {
+			local_fields_time_info = fields_time_info_dst;
+			remote_fields_time_info = fields_time_info_src;
+			lag_seconds = local_fields_time_info->lag_seconds;
 		}
-		while((((long)remote_fields_time_info->current_num_elapsed_days)*((long)SECONDS_PER_DAY))+remote_fields_time_info->current_second+lag_seconds <= (((long)local_fields_time_info->current_num_elapsed_days)*((long)SECONDS_PER_DAY)) + local_fields_time_info->current_second) {
-			if (remote_fields_time_info->timer->is_timer_on(remote_fields_time_info->current_year, remote_fields_time_info->current_month, remote_fields_time_info->current_day, remote_fields_time_info->current_second, remote_fields_time_info->current_num_elapsed_days, 
-				                                            time_mgr->get_start_year(), time_mgr->get_start_month(), time_mgr->get_start_day(), time_mgr->get_start_second(), time_mgr->get_start_num_elapsed_day())) {
-				remote_fields_time_info->last_timer_num_elapsed_days = remote_fields_time_info->current_num_elapsed_days;
-				remote_fields_time_info->last_timer_second = remote_fields_time_info->current_second;
-			}	
-			time_mgr->advance_time(remote_fields_time_info->current_year, remote_fields_time_info->current_month, remote_fields_time_info->current_day, remote_fields_time_info->current_second, remote_fields_time_info->current_num_elapsed_days,  remote_fields_time_info->time_step_in_second);
-		}			
-		remote_fields_time_info->get_time_of_next_timer_on(false);
+		else {
+			local_fields_time_info = fields_time_info_src;
+			remote_fields_time_info = fields_time_info_dst;
+			lag_seconds = -remote_fields_time_info->lag_seconds;
+		}
+		time_mgr->get_current_time(local_fields_time_info->current_year, local_fields_time_info->current_month, local_fields_time_info->current_day, local_fields_time_info->current_second, 0, "CCPL internal");
+		local_fields_time_info->current_num_elapsed_days = time_mgr->get_current_num_elapsed_day();  
+		EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, local_fields_time_info->inout_interface->get_comp_id(), !((local_fields_time_info->last_timer_num_elapsed_days != -1)) || ((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second >= ((long)local_fields_time_info->last_timer_num_elapsed_days)*100000+local_fields_time_info->last_timer_second,
+		                 "Software error in Connection_coupling_procedure::execute: current time is earlier than last timer time");
+		EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, local_fields_time_info->inout_interface->get_comp_id(), ((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second <= ((long)local_fields_time_info->next_timer_num_elapsed_days)*100000+local_fields_time_info->next_timer_second,
+		                 "Please make sure that the import/export interface \"%s\" is called when its timer is on. Please check the model code with the annotation \"%s\"", 
+		                 local_fields_time_info->inout_interface->get_interface_name(), annotation_mgr->get_annotation(local_fields_time_info->inout_interface->get_interface_id(), "registering interface"));
+		if (time_mgr->is_timer_on(local_fields_time_info->timer->get_frequency_unit(), local_fields_time_info->timer->get_frequency_count(), local_fields_time_info->timer->get_local_lag_count())) {
+			if (((long)local_fields_time_info->current_num_elapsed_days)*100000+local_fields_time_info->current_second == ((long)local_fields_time_info->next_timer_num_elapsed_days)*100000+local_fields_time_info->next_timer_second) {
+				local_fields_time_info->last_timer_num_elapsed_days = local_fields_time_info->next_timer_num_elapsed_days;
+				local_fields_time_info->last_timer_second = local_fields_time_info->next_timer_second;
+				local_fields_time_info->get_time_of_next_timer_on(true);
+			}
+			while((((long)remote_fields_time_info->current_num_elapsed_days)*((long)SECONDS_PER_DAY))+remote_fields_time_info->current_second+lag_seconds <= (((long)local_fields_time_info->current_num_elapsed_days)*((long)SECONDS_PER_DAY)) + local_fields_time_info->current_second) {
+				if (remote_fields_time_info->timer->is_timer_on(remote_fields_time_info->current_year, remote_fields_time_info->current_month, remote_fields_time_info->current_day, remote_fields_time_info->current_second, remote_fields_time_info->current_num_elapsed_days, 
+					                                            time_mgr->get_start_year(), time_mgr->get_start_month(), time_mgr->get_start_day(), time_mgr->get_start_second(), time_mgr->get_start_num_elapsed_day())) {
+					remote_fields_time_info->last_timer_num_elapsed_days = remote_fields_time_info->current_num_elapsed_days;
+					remote_fields_time_info->last_timer_second = remote_fields_time_info->current_second;
+				}	
+				time_mgr->advance_time(remote_fields_time_info->current_year, remote_fields_time_info->current_month, remote_fields_time_info->current_day, remote_fields_time_info->current_second, remote_fields_time_info->current_num_elapsed_days,  remote_fields_time_info->time_step_in_second);
+			}			
+			remote_fields_time_info->get_time_of_next_timer_on(false);
+		}
 	}
 	
 	if (inout_interface->get_import_or_export_or_remap() == 0) { 
-		((Runtime_trans_algorithm*)runtime_data_transfer_algorithm)->receve_data_in_temp_buffer();
+		((Runtime_trans_algorithm*)runtime_data_transfer_algorithm)->receive_data_in_temp_buffer();
 		if (bypass_timer) {
 			current_remote_fields_time = -1;
 			if (inout_interface->get_bypass_counter() == 1) {
 				EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, inout_interface->get_comp_id(), !(!words_are_the_same(time_mgr->get_run_type(), RUNTYPE_CONTINUE) && !words_are_the_same(time_mgr->get_run_type(), RUNTYPE_BRANCH)) || last_remote_fields_time == -1, "Software error in Connection_coupling_procedure::execute: wrong last_remote_fields_time 1");
 			}
-			else EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, inout_interface->get_comp_id(), inout_interface->get_bypass_counter() - 1 == last_remote_fields_time / ((long)100000000000000), "Software error in Connection_coupling_procedure::execute: wrong last_remote_fields_time 2");
+			else if (!words_are_the_same(time_mgr->get_run_type(), RUNTYPE_CONTINUE) && !words_are_the_same(time_mgr->get_run_type(), RUNTYPE_BRANCH))
+				EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, inout_interface->get_comp_id(), inout_interface->get_bypass_counter() - 1 == last_remote_fields_time / ((long)100000000000000), "Software error in Connection_coupling_procedure::execute: wrong last_remote_fields_time 2");
 			transfer_data = true;
 		}
 		else if (!(fields_time_info_dst->current_num_elapsed_days != fields_time_info_dst->last_timer_num_elapsed_days || fields_time_info_dst->current_second != fields_time_info_dst->last_timer_second)) {
@@ -519,7 +533,7 @@ void Inout_interface::initialize_data(const char *interface_name, int interface_
 Inout_interface::~Inout_interface()
 {
 	if (inversed_dst_fraction != NULL) {
-		EXECUTION_REPORT_LOG(REPORT_LOG, -1, true, "inout interface %s %lx release %lx", interface_name, (int)this, (int)inversed_dst_fraction);
+		EXECUTION_REPORT_LOG(REPORT_LOG, -1, true, "inout interface %s %lx release %lx", interface_name, this, inversed_dst_fraction);
 		delete [] inversed_dst_fraction;
 	}
 
@@ -711,15 +725,17 @@ void Inout_interface::import_restart_data(const char *temp_array_buffer, long &b
 void Inout_interface::add_coupling_procedure(Connection_coupling_procedure *coupling_procedure)
 {
 	coupling_procedures.push_back(coupling_procedure);
-	if (import_or_export_or_remap == 0) {
+	if (import_or_export_or_remap == 0 || import_or_export_or_remap == 1) {
 		EXECUTION_REPORT(REPORT_ERROR, -1, fields_connected_status.size() > 0, "Software error in Inout_interface::add_coupling_procedure: %s", interface_name);
 		for (int i = 0; i < coupling_procedure->fields_mem_registered.size(); i ++)
 			for (int j = 0; j < fields_mem_registered.size(); j ++)
 				if (coupling_procedure->fields_mem_registered[i] == fields_mem_registered[j]) {
-					EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Add coupling procedures to the field \"%s\" of import interface \"%s", fields_mem_registered[j]->get_field_name(), interface_name);
-					EXECUTION_REPORT(REPORT_ERROR, -1, !fields_connected_status[j], "Software error in Inout_interface::add_coupling_procedure: %s %s %d", interface_name, fields_mem_registered[j]->get_field_name(), j);
+					EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Add coupling procedures to the field \"%s\" of import/export interface \"%s", fields_mem_registered[j]->get_field_name(), interface_name);
+					if (import_or_export_or_remap == 0)
+						EXECUTION_REPORT(REPORT_ERROR, -1, !fields_connected_status[j], "Software error in Inout_interface::add_coupling_procedure: %s %s %d", interface_name, fields_mem_registered[j]->get_field_name(), j);
+					if (!fields_connected_status[i])
+						num_fields_connected ++;
 					fields_connected_status[j] = true;
-					num_fields_connected ++;
 				}
 	}
 }
@@ -792,13 +808,31 @@ void Inout_interface::postprocessing_for_frac_based_remapping(bool bypass_timer)
 }
 
 
-void Inout_interface::execute(bool bypass_timer, int *field_update_status, int size_field_update_status, const char *annotation)
+void Inout_interface::execute(bool bypass_timer, int API_id, int *field_update_status, int size_field_update_status, const char *annotation)
 {
 	bool at_first_normal_step = false;
 
 
 	if (import_or_export_or_remap == 0) {
-		EXECUTION_REPORT(REPORT_ERROR, comp_id, fields_mem_registered.size() == num_fields_connected, "ERROR happens when executing the import interface \"%s\": the coupling procedures have not been fully generated. Please verify the model code with the annotation \"%s\".", interface_name, annotation);
+		if (fields_mem_registered.size() != num_fields_connected)
+			for (int i = 0; i < fields_mem_registered.size(); i ++)
+				if (!fields_connected_status[i] && (imported_fields_necessity.size() == 0 || imported_fields_necessity[i] == FIELD_NECESSITY_NECESSARY)) {
+					std::vector<const char *> export_comp_full_names, export_interface_names;
+					inout_interface_mgr->get_all_export_interfaces_of_a_field(comp_id, fields_mem_registered[i]->get_field_name(), export_comp_full_names, export_interface_names);
+					char *error_string = NULL;
+					long string_size;
+					if (comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_current_proc_local_id() == 0) {
+						error_string = new char [NAME_STR_SIZE*(export_comp_full_names.size()+2)];
+						error_string[0] = '\0';
+						for (int i = 0; i < export_comp_full_names.size(); i ++)
+							sprintf(error_string, "%s                   %d) Component model is \"%s\", export interface is \"%s\"\n", error_string, i+1, export_comp_full_names[i], export_interface_names[i]);
+						string_size = strlen(error_string) + 1;
+					}
+					bcast_array_in_one_comp(comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_current_proc_local_id(), &error_string, string_size, comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_comm_group());
+					EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "ERROR happens when executing the import interface \"%s\" (the corresponding code annotation is \"%s\"): the coupling procedures for the import field \"%s\" have not been fully generated. The export interfaces that have been registered with this field are listed as follows. Please make sure the correct coupling generation.\n%s", interface_name, annotation, fields_mem_registered[i]->get_field_name(), error_string);
+					if (error_string != NULL)
+						delete [] error_string;
+				}	
 		if (fields_mem_registered.size() > size_field_update_status)
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "Fail execute the interface \"%s\" corresponding to the model code with the annotation \"%s\": the array size of \"field_update_status\" (%d) is smaller than the number of fields (%d). Please verify.", interface_name, annotation, size_field_update_status, fields_mem_registered.size());
 		for (int i = 0; i < fields_mem_registered.size(); i ++)
@@ -828,13 +862,13 @@ void Inout_interface::execute(bool bypass_timer, int *field_update_status, int s
 	if (bypass_timer && (execution_checking_status & 0x2) != 0)
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "The timers of the import/export interface \"%s\" cannot be bypassed again (the corresponding annotation of the model code is \"%s\") because the timers have been bypassed before", interface_name, annotation, annotation_mgr->get_annotation(interface_id, "using timer"));
 	if ((execution_checking_status & 0x1) == 0 && bypass_timer || (execution_checking_status & 0x2) == 0 && !bypass_timer) {
-		synchronize_comp_processes_for_API(comp_id, API_ID_INTERFACE_EXECUTE, comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "software error")->get_comm_group(), "executing an import/export interface", annotation);
-		check_API_parameter_string(comp_id, API_ID_INTERFACE_EXECUTE, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"executing an import/export interface"), "executing an import/export interface", interface_name, "the corresponding interface name", annotation);
+		synchronize_comp_processes_for_API(comp_id, API_id, comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "software error")->get_comm_group(), "executing an import/export interface", annotation);
+		check_API_parameter_string(comp_id, API_id, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"executing an import/export interface"), "executing an import/export interface", interface_name, "the corresponding interface name", annotation);
 		int bypass_timer_int;
 		if (bypass_timer)
 			bypass_timer_int = 0;
 		else bypass_timer_int = 1;
-		check_API_parameter_int(comp_id, API_ID_INTERFACE_EXECUTE, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"executing an import/export interface"), NULL, bypass_timer_int, "the value for specifying whether bypass timers", annotation);
+		check_API_parameter_int(comp_id, API_id, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"executing an import/export interface"), NULL, bypass_timer_int, "the value for specifying whether bypass timers", annotation);
 		if (bypass_timer) {
 			execution_checking_status = execution_checking_status | 0x1;
 			annotation_mgr->add_annotation(interface_id, "bypassing timer", annotation);
@@ -860,8 +894,8 @@ void Inout_interface::execute(bool bypass_timer, int *field_update_status, int s
 	if (import_or_export_or_remap >= 2) {
 		if (import_or_export_or_remap == 3)
 			preprocessing_for_frac_based_remapping();
-		children_interfaces[0]->execute(bypass_timer, field_update_status, size_field_update_status+1, annotation);
-		children_interfaces[1]->execute(bypass_timer, field_update_status, size_field_update_status+1, annotation);
+		children_interfaces[0]->execute(bypass_timer, API_id, field_update_status, size_field_update_status+1, annotation);
+		children_interfaces[1]->execute(bypass_timer, API_id, field_update_status, size_field_update_status+1, annotation);
 		if (import_or_export_or_remap == 3)
 			postprocessing_for_frac_based_remapping(bypass_timer);
 		return;
@@ -962,6 +996,192 @@ void Inout_interface::add_remappling_fraction_processing(void *frac_src, void *f
 }
 
 
+int Inout_interface::get_h2d_grid_area_in_remapping_weights(const char *interface_name, int field_index, void *output_area_data, int area_array_size, const char *data_type, const char *annotation)
+{
+	int i, j;
+	double *selected_area_array_in_wgts = NULL;
+	bool field_has_connection = false;
+
+	
+	if (children_interfaces.size() > 0)
+		return children_interfaces[0]->get_h2d_grid_area_in_remapping_weights(interface_name, field_index, output_area_data, area_array_size, data_type, annotation);
+
+	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, comp_id, field_index >= 0 && field_index < fields_mem_registered.size(), "ERROR happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\" based on the coupling interface \"%s\": the parameter of field index (%d) is out of bounds ([1,%d]). Please verify the model code with the annotation \"%s\"", interface_name, field_index+1, fields_mem_registered.size(), annotation);
+	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, comp_id, fields_mem_registered[field_index]->get_grid_id() != -1, "ERROR happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\" based on the coupling interface \"%s\": the field \"%s\" corresponding to the field index (%d) is not on a grid. Please verify the model code with the annotation \"%s\"", interface_name, fields_mem_registered[field_index]->get_field_name(), field_index+1, fields_mem_registered.size()-1, annotation);
+	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, comp_id, original_grid_mgr->search_grid_info(fields_mem_registered[field_index]->get_grid_id())->is_H2D_grid(), "ERROR happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\" based on the coupling interface \"%s\": the field \"%s\" corresponding to the field index (%d) is not on a horizontal grid. Please verify the model code with the annotation \"%s\"", interface_name, fields_mem_registered[field_index]->get_field_name(), field_index+1, annotation);
+
+	for (i = 0; i < coupling_procedures.size(); i ++) {
+		for (j = 0; j < coupling_procedures[i]->coupling_connection->fields_name.size(); j ++)
+			if (words_are_the_same(fields_mem_registered[field_index]->get_field_name(),coupling_procedures[i]->coupling_connection->fields_name[j])) {
+				if (import_or_export_or_remap == 0) {
+					if (coupling_procedures[i]->coupling_connection->dst_fields_info[j]->runtime_remapping_weights != NULL && coupling_procedures[i]->coupling_connection->dst_fields_info[j]->runtime_remapping_weights->get_src_H2D_grid_area() != NULL) {
+						selected_area_array_in_wgts = coupling_procedures[i]->coupling_connection->dst_fields_info[j]->runtime_remapping_weights->get_dst_H2D_grid_area();
+						break;
+					}
+				}
+				else if (import_or_export_or_remap == 1) {
+					if (coupling_procedures[i]->coupling_connection->src_fields_info[j]->runtime_remapping_weights != NULL && coupling_procedures[i]->coupling_connection->src_fields_info[j]->runtime_remapping_weights->get_src_H2D_grid_area() != NULL) {
+						selected_area_array_in_wgts = coupling_procedures[i]->coupling_connection->src_fields_info[j]->runtime_remapping_weights->get_src_H2D_grid_area();
+						break;
+					}					
+				}
+				else EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, false, "Software error in Inout_interface::get_h2d_grid_area_in_remapping_weights");
+				field_has_connection = true;
+			}	
+		if (selected_area_array_in_wgts != NULL)
+			break;
+	}
+
+	EXECUTION_REPORT(REPORT_WARNING, comp_id, field_has_connection, "WARNING happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\" based on the coupling interface \"%s\": the field \"%s\" corresponding to the field index (%d) has not been used in model coupling. Please verify the model code with the annotation \"%s\"", interface_name, fields_mem_registered[field_index]->get_field_name(), field_index+1, annotation);
+
+	if (selected_area_array_in_wgts == NULL)
+		return 0;
+
+	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, comp_id, area_array_size >= fields_mem_registered[field_index]->get_size_of_field(), "ERROR happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\" based on the field \"%s\" of the coupling interface \"%s\": the array size (%d) of the parameter \"area_array\" is smaller than required (%d). ", fields_mem_registered[field_index]->get_field_name(), interface_name, area_array_size, fields_mem_registered[field_index]->get_size_of_field());
+	Decomp_info *decomp_info = decomps_info_mgr->get_decomp_info(fields_mem_registered[field_index]->get_decomp_id());	
+	const int *local_cells_global_index = decomp_info->get_local_cell_global_indx();
+	if (words_are_the_same(data_type, DATA_TYPE_FLOAT)) {
+		float *float_output_area = (float*) output_area_data;
+		for (i = 0; i < decomp_info->get_num_local_cells(); i ++) {
+			float_output_area[i] = (float) (selected_area_array_in_wgts[local_cells_global_index[i]]);
+		}
+	}
+	else if (words_are_the_same(data_type, DATA_TYPE_DOUBLE)) {
+		double *double_output_area = (double*) output_area_data;
+		for (i = 0; i < decomp_info->get_num_local_cells(); i ++)
+			double_output_area[i] = selected_area_array_in_wgts[local_cells_global_index[i]];
+	}
+	else EXECUTION_REPORT(REPORT_ERROR, -1, false, "Software error in Inout_interface::get_h2d_grid_area_in_remapping_weights: wrong data type");
+
+	return 1;
+}
+
+
+void Inout_interface::write_export_info_into_XML_file(TiXmlElement *parent_element)
+{
+	TiXmlElement *current_element = new TiXmlElement("export_interface");
+	parent_element->LinkEndChild(current_element);
+	current_element->SetAttribute("interface_name", interface_name);
+	for (int i = 0; i < fields_mem_registered.size(); i ++) {
+		TiXmlElement *field_element = new TiXmlElement("export_field");
+		current_element->LinkEndChild(field_element);
+		field_element->SetAttribute("field_name", fields_mem_registered[i]->get_field_name());
+	}
+}
+
+
+void Inout_interface::set_fields_necessity(int *necessity, int size_necessity, const char *annotation)
+{
+	EXECUTION_REPORT(REPORT_ERROR, comp_id, size_necessity >= fields_mem_registered.size(), "ERROR happens when calling the API \"CCPL_register_import_interface\" to register the export interface \"%s\": the array size (%d) of the parameter \"necessity\" is smaller than the number of field instances in this interface. Please verify the model code with the annotation \"%s\".", interface_name, size_necessity, fields_mem_registered.size(), annotation);
+	check_API_parameter_data_array(comp_id, API_ID_INTERFACE_REG_IMPORT, comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_comm_group(), "registerring an import interface", fields_mem_registered.size(), sizeof(int), (const char*)necessity, "necessity", annotation);
+	for (int i = 0; i < fields_mem_registered.size(); i ++) {
+		EXECUTION_REPORT(REPORT_ERROR, comp_id, necessity[i] == FIELD_NECESSITY_NECESSARY || necessity[i] == FIELD_NECESSITY_OPTIONAL, "CCPL_register_import_interface\" to register the export interface \"%s\": the number %d value (%d) in the parameter \"necessity\" is not either %d (means necessary) nor %d (means optional). Please verify the model code with the annotation \"%s\".", interface_name, i, necessity[i], FIELD_NECESSITY_NECESSARY, FIELD_NECESSITY_OPTIONAL, annotation);
+		imported_fields_necessity.push_back(necessity[i]);
+	}
+}
+
+
+int Inout_interface::check_is_import_field_connected(int field_instance_id, const char *annotation)
+{
+	EXECUTION_REPORT(REPORT_ERROR, comp_id, import_or_export_or_remap == 0, "ERROR happens when calling the API \"CCPL_check_is_import_field_connected\": the corresponding coupling interface \"%s\" is not an import interface. Please verify the model code with the annotation \"%s\".", interface_name, annotation);
+	int i;
+	for (i = 0; i < fields_mem_registered.size(); i ++)
+		if (fields_mem_registered[i]->get_field_instance_id() == field_instance_id)
+			break;
+	EXECUTION_REPORT(REPORT_ERROR, comp_id, i < fields_mem_registered.size(), "ERROR happens when calling the API \"CCPL_check_is_import_field_connected\": the parameter \"field_instance_id\" fails to specify a field instance in the corresponding coupling interface \"%s\". Please verify the model code with the annotation \"%s\".", interface_name, annotation);
+
+	return (fields_connected_status[i]? 1 : 0);
+}
+
+
+void Inout_interface::dump_active_coupling_connections_into_XML(TiXmlElement *root_element)
+{
+	TiXmlElement *parent_element = NULL;
+    TiXmlElement *interface = NULL;
+	
+    for (TiXmlNode *child = root_element->FirstChild(); child != NULL; child = child->NextSibling())
+    	if(import_or_export_or_remap == 0 && words_are_the_same(child->Value(), "import_interfaces") || import_or_export_or_remap == 1 && words_are_the_same(child->Value(), "export_interfaces")) {
+    		parent_element = child->ToElement();
+    		break;
+    	}
+	EXECUTION_REPORT(REPORT_ERROR, -1, parent_element != NULL, "Software error Inout_interface::dump_active_coupling_connections_into_XML");
+	
+    for (TiXmlNode *child = parent_element->FirstChild(); child != NULL; child = child->NextSibling()) {
+        TiXmlElement *temp = child->ToElement();
+        if(words_are_the_same(temp->Attribute("interface_name"), interface_name)) {
+            interface = child->ToElement();
+            break;
+        }
+    }
+	
+    if (interface == NULL) {
+	    interface = new TiXmlElement("interface");
+	    parent_element->LinkEndChild(interface);
+	    interface->SetAttribute("interface_name", interface_name);
+	}
+    for (int i = 0; i < coupling_procedures.size(); i++) {
+    	if (coupling_procedures[i]->get_coupling_connections_dumped())
+    		continue;
+    	Coupling_connection *coupling_connection = coupling_procedures[i]->get_coupling_connection();
+    	TiXmlElement *fields = new TiXmlElement("fields");
+    	interface->LinkEndChild(fields);
+    	if (import_or_export_or_remap == 0){
+    		fields->SetAttribute("comp_full_name",coupling_connection->src_comp_interfaces[0].first);
+    		fields->SetAttribute("interface_name",coupling_connection->src_comp_interfaces[0].second);
+    	}
+    	if (import_or_export_or_remap == 1){
+    		fields->SetAttribute("comp_full_name",coupling_connection->dst_comp_full_name);
+    		fields->SetAttribute("interface_name",coupling_connection->dst_interface_name);
+    	}
+    	for (int j = 0; j < coupling_connection->fields_name.size(); j++) {
+    		TiXmlElement *field = new TiXmlElement("field");
+    		fields->LinkEndChild(field);
+    		field->SetAttribute("name",coupling_connection->fields_name[j]);
+    	}
+    	coupling_procedures[i]->set_coupling_connections_dumped();
+    }
+}
+
+
+void Inout_interface::dump_active_coupling_connections()
+{
+	char XML_file_name[NAME_STR_SIZE];
+    TiXmlElement *root_element;
+	TiXmlDocument *XML_file;
+	int i;
+
+
+	if (import_or_export_or_remap != 0 && import_or_export_or_remap != 1 || comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_current_proc_local_id() != 0)
+		return;
+
+	for(i = 0; i < coupling_procedures.size(); i ++)
+		if(!coupling_procedures[i]->get_coupling_connections_dumped())
+			break;
+	if (i == coupling_procedures.size())
+		return;
+
+	sprintf(XML_file_name, "%s/%s.active_coupling_connections.xml", comp_comm_group_mgt_mgr->get_active_coupling_connections_dir(), comp_full_name);
+	XML_file = new TiXmlDocument(XML_file_name);
+	if (!XML_file->LoadFile()) {
+		delete XML_file;
+	    XML_file = new TiXmlDocument;
+	    TiXmlDeclaration *XML_declaration = new TiXmlDeclaration(("1.0"),(""),(""));
+	    XML_file->LinkEndChild(XML_declaration);
+	    root_element = new TiXmlElement("Component");
+	    XML_file->LinkEndChild(root_element);
+	    root_element->SetAttribute("name", comp_full_name);
+    	TiXmlElement *import_interfaces = new TiXmlElement("import_interfaces");
+    	TiXmlElement *export_interfaces = new TiXmlElement("export_interfaces");
+    	root_element->LinkEndChild(import_interfaces);
+    	root_element->LinkEndChild(export_interfaces);
+	}
+	else root_element = XML_file->RootElement();
+	dump_active_coupling_connections_into_XML(root_element);
+	EXECUTION_REPORT(REPORT_ERROR, -1, XML_file->SaveFile(XML_file_name), "software error in Inout_interface_mgt::dump_active_coupling_connections: fail to write the XML file %s", XML_file_name);
+	delete XML_file;
+}
+
+
 Inout_interface_mgt::Inout_interface_mgt(const char *temp_array_buffer, long buffer_content_iter)
 {
 	while (buffer_content_iter > 0)
@@ -983,7 +1203,7 @@ void Inout_interface_mgt::generate_remapping_interface_connection(Inout_interfac
 	Coupling_connection *coupling_connection = new Coupling_connection(coupling_generator->apply_connection_id());
 	Inout_interface *child_interface_export = new_interface->get_child_interface(0);
 	Inout_interface *child_interface_import = new_interface->get_child_interface(1);
-	std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> src_comp_interface;
+	std::pair<const char*, const char*> src_comp_interface;
 
 	if (!has_frac_remapping)
 		interfaces.push_back(new_interface);
@@ -991,8 +1211,8 @@ void Inout_interface_mgt::generate_remapping_interface_connection(Inout_interfac
 	strcpy(coupling_connection->dst_interface_name, child_interface_import->get_interface_name());
 	for (int i = 0; i < num_fields; i ++)
 		coupling_connection->fields_name.push_back(strdup(memory_manager->get_field_instance(field_ids_src[i])->get_field_name()));
-	strcpy(src_comp_interface.first, coupling_connection->dst_comp_full_name);
-	strcpy(src_comp_interface.second, child_interface_export->get_interface_name());
+	src_comp_interface.first = strdup(coupling_connection->dst_comp_full_name);
+	src_comp_interface.second = strdup(child_interface_export->get_interface_name());
 	coupling_connection->src_comp_interfaces.push_back(src_comp_interface);
 
 	interfaces.push_back(child_interface_export);
@@ -1047,6 +1267,10 @@ int Inout_interface_mgt::register_inout_interface(const char *interface_name, in
 		
 	}
 	interfaces.push_back(new_interface);
+
+	if (import_or_export_or_remap == 1)
+		write_comp_export_info_into_XML_file(new_interface->get_comp_id());
+	
 	return new_interface->get_interface_id();
 }
 
@@ -1095,7 +1319,7 @@ Inout_interface *Inout_interface_mgt::get_interface(int comp_id, const char *int
 }
 
 
-void Inout_interface_mgt::get_all_unconnected_inout_interface_fields_info(std::vector<char*> &all_descendant_real_comp_fullnames, char **temp_array_buffer, long &buffer_content_size, MPI_Comm comm)
+void Inout_interface_mgt::get_all_unconnected_inout_interface_fields_info(std::vector<const char*> &all_descendant_real_comp_fullnames, char **temp_array_buffer, long &buffer_content_size, MPI_Comm comm)
 {
 	char *local_temp_array_buffer = NULL;
 	long local_buffer_max_size = 0, local_buffer_content_size = 0;
@@ -1139,7 +1363,7 @@ void Inout_interface_mgt::get_all_import_interfaces_of_a_component(std::vector<I
 }
 
 
-void Inout_interface_mgt::execute_interface(int interface_id, bool bypass_timer, int *field_update_status, int size_field_update_status, int *num_dst_fields, const char *annotation)
+void Inout_interface_mgt::execute_interface(int interface_id, int API_id, bool bypass_timer, int *field_update_status, int size_field_update_status, int *num_dst_fields, const char *annotation)
 {
 	Inout_interface *inout_interface;
 
@@ -1147,13 +1371,15 @@ void Inout_interface_mgt::execute_interface(int interface_id, bool bypass_timer,
 		EXECUTION_REPORT(REPORT_ERROR, -1, false, "0x%x is not an legal ID of an import/export interface. Please check the model code with the annotation \"%s\"", interface_id, annotation);
 	inout_interface = get_interface(interface_id);
 	EXECUTION_REPORT_LOG(REPORT_LOG, inout_interface->get_comp_id(), true, "Begin to execute interface \"%s\" (model code annotation is \"%s\")", inout_interface->get_interface_name(), annotation);	
-	inout_interface->execute(bypass_timer, field_update_status, size_field_update_status, annotation);
+	inout_interface->execute(bypass_timer, API_id, field_update_status, size_field_update_status, annotation);
 	*num_dst_fields = inout_interface->get_num_dst_fields();
 	EXECUTION_REPORT_LOG(REPORT_LOG, inout_interface->get_comp_id(), true, "Finishing executing interface \"%s\" (model code annotation is \"%s\")", inout_interface->get_interface_name(), annotation);
+
+	inout_interface->dump_active_coupling_connections();
 }
 
 
-void Inout_interface_mgt::execute_interface(int comp_id, const char *interface_name, bool bypass_timer, int *field_update_status, int size_field_update_status, int *num_dst_fields, const char *annotation)
+void Inout_interface_mgt::execute_interface(int comp_id, int API_id, const char *interface_name, bool bypass_timer, int *field_update_status, int size_field_update_status, int *num_dst_fields, const char *annotation)
 {
 	Inout_interface *inout_interface;
 
@@ -1163,16 +1389,18 @@ void Inout_interface_mgt::execute_interface(int comp_id, const char *interface_n
 	if (inout_interface == NULL)
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "Registered interface of this component does not contain an import/export interface named \"%s\". Please check the model code with the annotation \"%s\"", interface_name, annotation);
 	EXECUTION_REPORT_LOG(REPORT_LOG, inout_interface->get_comp_id(), true, "Begin to execute interface \"%s\" (model code annotation is \"%s\")", inout_interface->get_interface_name(), annotation);	
-	inout_interface->execute(bypass_timer, field_update_status, size_field_update_status, annotation);
+	inout_interface->execute(bypass_timer, API_id, field_update_status, size_field_update_status, annotation);
 	*num_dst_fields = inout_interface->get_num_dst_fields();
 	EXECUTION_REPORT_LOG(REPORT_LOG, inout_interface->get_comp_id(), true, "Finishing executing interface \"%s\" (model code annotation is \"%s\")", inout_interface->get_interface_name(), annotation);
+
+	inout_interface->dump_active_coupling_connections();
 }
 
 
 void Inout_interface_mgt::runtime_receive_algorithms_receive_data()
 {
 	for (int i = 0; i < all_runtime_receive_algorithms.size(); i ++)
-		all_runtime_receive_algorithms[i]->receve_data_in_temp_buffer();
+		all_runtime_receive_algorithms[i]->receive_data_in_temp_buffer();
 }
 
 
@@ -1224,3 +1452,96 @@ void Inout_interface_mgt::import_restart_data(Restart_mgt *restart_mgr, const ch
 }
 
 
+void Inout_interface_mgt::write_comp_export_info_into_XML_file(int comp_id)
+{
+	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->search_global_node(comp_id);
+	char XML_file_name[NAME_STR_SIZE];
+
+
+	if (comp_node->get_current_proc_local_id() == 0) {
+		TiXmlDocument *XML_file = new TiXmlDocument;
+		TiXmlDeclaration *XML_declaration = new TiXmlDeclaration(("1.0"),(""),(""));
+		EXECUTION_REPORT(REPORT_ERROR, -1, XML_file != NULL, "Software error: cannot create an xml file");
+		XML_file->LinkEndChild(XML_declaration);
+		TiXmlElement *root_element = new TiXmlElement("export_interfaces");
+		root_element->SetAttribute("comp_full_name", comp_node->get_comp_full_name());
+		XML_file->LinkEndChild(root_element);
+		for (int i = 0; i < interfaces.size(); i ++)
+			if (interfaces[i]->get_import_or_export_or_remap() == 1 && interfaces[i]->get_comp_id() == comp_id)
+				interfaces[i]->write_export_info_into_XML_file(root_element);
+			sprintf(XML_file_name, "%s/%s.exports_info.xml", comp_comm_group_mgt_mgr->get_components_exports_dir(), comp_node->get_full_name());
+			EXECUTION_REPORT(REPORT_ERROR, -1, XML_file->SaveFile(XML_file_name), "Software error in Inout_interface_mgt::write_comp_export_info_into_XML_file: fail to write the XML file %s", XML_file_name);
+			delete XML_file;	
+	}
+	MPI_Barrier(comp_node->get_comm_group());
+}
+
+
+void Inout_interface_mgt::get_all_export_interfaces_of_a_field(int comp_id, const char *field_name, std::vector<const char*> &export_comp_full_names, std::vector<const char*> &export_interface_names)
+{
+	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->search_global_node(comp_id);
+	int line_number;
+	char XML_file_name[NAME_STR_SIZE];
+
+
+	for (int i = 0; i < export_comp_full_names.size(); i ++) {
+		delete [] export_comp_full_names[i];
+		delete [] export_interface_names[i];
+	}
+	export_comp_full_names.clear();
+	export_interface_names.clear();
+	 
+	if (comp_node->get_current_proc_local_id() == 0) {
+		DIR *cur_dir = opendir(comp_comm_group_mgt_mgr->get_components_exports_dir());
+		struct dirent *ent = NULL;
+		struct stat st;
+		EXECUTION_REPORT(REPORT_ERROR, -1, cur_dir != NULL, "Software error in Inout_interface_mgt::get_all_export_interfaces_of_a_field");
+		while ((ent = readdir(cur_dir)) != NULL) {
+			stat(ent->d_name, &st);
+			if (!(strlen(ent->d_name) > 4 && words_are_the_same(ent->d_name+strlen(ent->d_name)-4, ".xml")))
+				continue;
+			sprintf(XML_file_name, "%s/%s", comp_comm_group_mgt_mgr->get_components_exports_dir(), ent->d_name);
+			TiXmlDocument *XML_file = open_XML_file_to_read(comp_id, XML_file_name, MPI_COMM_NULL, false);
+			EXECUTION_REPORT(REPORT_ERROR, -1, XML_file != NULL, "Software error in Inout_interface_mgt::get_all_export_interfaces_of_a_field: no XML file");
+			TiXmlElement *root_element = XML_file->FirstChildElement();
+			const char *comp_full_name = get_XML_attribute(comp_id, -1, root_element, "comp_full_name", XML_file_name, line_number, "the full name of the corresponding component model", "internal XML files generated by C-Coupler");
+			for (TiXmlNode *export_interface_node = root_element->FirstChildElement(); export_interface_node != NULL; export_interface_node = export_interface_node->NextSibling()) {
+				if (export_interface_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+					continue;
+				TiXmlElement *export_interface_element = export_interface_node->ToElement();
+				const char *interface_name = get_XML_attribute(comp_id, -1, export_interface_element, "interface_name", XML_file_name, line_number, "the name of the export interface", "internal XML files generated by C-Coupler");
+				for (TiXmlNode *export_field_node = export_interface_element->FirstChildElement(); export_field_node != NULL; export_field_node = export_field_node->NextSibling()) {
+					if (export_field_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+						continue;
+					TiXmlElement *export_field_element = export_field_node->ToElement();
+					const char *XML_field_name = get_XML_attribute(comp_id, -1, export_field_element, "field_name", XML_file_name, line_number, "the name of the export field", "internal XML files generated by C-Coupler");
+					if (words_are_the_same(XML_field_name, field_name)) {
+						export_comp_full_names.push_back(strdup(comp_full_name));
+						export_interface_names.push_back(strdup(interface_name));
+					}
+				}
+			}
+			
+			delete XML_file;
+		}
+	}
+	MPI_Barrier(comp_node->get_comm_group());
+}
+
+
+Inout_interface *Inout_interface_mgt::search_an_inout_interface_executed_with_timer(int comp_id)
+{
+	for (int i = 0; i < interfaces.size(); i ++)
+		if (interfaces[i]->get_comp_id() == comp_id && interfaces[i]->get_import_or_export_or_remap() < 2 && interfaces[i]->has_been_executed_with_timer())
+			return interfaces[i];
+
+	return NULL;
+}
+
+
+int Inout_interface_mgt::get_h2d_grid_area_in_remapping_weights(int interface_id, int field_index, void *output_area_data, int area_array_size, const char *data_type, const char *annotation)
+{
+	Inout_interface *inout_interface = get_interface(interface_id);
+	EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, inout_interface != NULL, "ERROR happens when calling the API \"CCPL_get_H2D_grid_area_in_remapping_wgts\": the parameter of interface ID is wrong. Please verify the model code with the annotation \"%s\"", annotation);
+	return inout_interface->get_h2d_grid_area_in_remapping_weights(inout_interface->get_interface_name(), field_index, output_area_data, area_array_size, data_type, annotation);
+}

@@ -17,12 +17,15 @@
 
 #define API_ID_FINALIZE                                 ((int)(0x00100001))
 #define API_ID_COMP_MGT_REG_COMP                        ((int)(0x00200002))
+#define API_ID_COMP_MGT_GET_COMP_LOG_FILE_NAME          ((int)(0x00200003))
+#define API_ID_COMP_MGT_GET_COMP_LOG_FILE_DEVICE        ((int)(0x00200005))
 #define API_ID_COMP_MGT_END_COMP_REG                    ((int)(0x00200004))
 #define API_ID_COMP_MGT_IS_CURRENT_PROC_IN_COMP         ((int)(0x00200007))
 #define API_ID_COMP_MGT_GET_CURRENT_PROC_ID_IN_COMP     ((int)(0x00200008))
 #define API_ID_COMP_MGT_GET_NUM_PROC_IN_COMP            ((int)(0x00200010))
 #define API_ID_COMP_MGT_GET_COMP_PROC_GLOBAL_ID         ((int)(0x00200011))
 #define API_ID_COMP_MGT_GET_COMP_ID                     ((int)(0x00200020))
+#define API_ID_COMP_MGT_IS_COMP_TYPE_COUPLED            ((int)(0x00200030))
 #define API_ID_GRID_MGT_REG_H2D_GRID_VIA_LOCAL_DATA     ((int)(0X00400000))
 #define API_ID_GRID_MGT_REG_H2D_GRID_VIA_GLOBAL_DATA    ((int)(0X00400001))
 #define API_ID_GRID_MGT_REG_H2D_GRID_VIA_FILE           ((int)(0X00400002))
@@ -38,6 +41,7 @@
 #define API_ID_GRID_MGT_SET_3D_GRID_STATIC_BOT_FLD      ((int)(0X00400800))
 #define API_ID_GRID_MGT_SET_3D_GRID_EXTERNAL_BOT_FLD    ((int)(0X00400a00))
 #define API_ID_GRID_MGT_GET_H2D_GRID_DATA               ((int)(0X00402000))
+#define API_ID_GRID_MGT_GET_H2D_GRID_AREA_FROM_WGTS     ((int)(0X00403000))
 #define API_ID_GRID_MGT_REG_MID_POINT_GRID              ((int)(0X00404000))
 #define API_ID_GRID_MGT_GET_GRID_SIZE                   ((int)(0X00408000))
 #define API_ID_GRID_MGT_REG_V1D_Z_GRID_VIA_MODEL        ((int)(0X00410000))
@@ -50,6 +54,7 @@
 #define API_ID_FIELD_MGT_REG_IO_FIELD_from_BUFFER       ((int)(0X01000004))
 #define API_ID_TIME_MGT_SET_TIME_STEP                   ((int)(0X02000001))
 #define API_ID_TIME_MGT_ADVANCE_TIME                    ((int)(0X02000002))
+#define API_ID_TIME_MGT_RESET_TIME_TO_START             ((int)(0X02000003))
 #define API_ID_TIME_MGT_DEFINE_SINGLE_TIMER             ((int)(0X02000004))
 #define API_ID_TIME_MGT_DEFINE_COMPLEX_TIMER            ((int)(0X02000008))
 #define API_ID_TIME_MGT_GET_CURRENT_NUM_DAYS_IN_YEAR	((int)(0X02100001))
@@ -72,12 +77,15 @@
 #define API_ID_TIME_MGT_GET_TIME_STEP                   ((int)(0X02110000))
 #define API_ID_TIME_MGT_CHECK_CURRENT_TIME              ((int)(0X02120000))
 #define API_ID_TIME_MGT_IS_TIMER_ON                     ((int)(0X02140000))
+#define API_ID_TIME_MGT_IS_MODEL_LAST_STEP              ((int)(0X02170000))
 #define API_ID_TIME_MGT_IS_MODEL_RUN_ENDED              ((int)(0X02180000))
 #define API_ID_INTERFACE_REG_IMPORT                     ((int)(0X04000001))
 #define API_ID_INTERFACE_REG_EXPORT                     ((int)(0X04000002))
 #define API_ID_INTERFACE_REG_NORMAL_REMAP               ((int)(0X04000003))
 #define API_ID_INTERFACE_REG_FRAC_REMAP                 ((int)(0X04000004))
-#define API_ID_INTERFACE_EXECUTE                        ((int)(0X04000005))
+#define API_ID_INTERFACE_EXECUTE_WITH_ID                ((int)(0X04000005))
+#define API_ID_INTERFACE_EXECUTE_WITH_NAME              ((int)(0X04000006))
+#define API_ID_INTERFACE_CHECK_IMPORT_FIELD_CONNECTED   ((int)(0X04000007))
 #define API_ID_INTERFACE_GET_LOCAL_COMP_FULL_NAME       ((int)(0X04000008))
 #define API_ID_REPORT_LOG                               ((int)(0X06000001))
 #define API_ID_REPORT_ERROR                             ((int)(0X06000002))
@@ -97,6 +105,7 @@ extern void check_API_parameter_int(int, int, MPI_Comm, const char*, int, const 
 extern void check_API_parameter_float(int, int, MPI_Comm, const char*, float, const char*, const char*);
 extern void check_API_parameter_double(int, int, MPI_Comm, const char*, double, const char*, const char*);
 extern void check_API_parameter_long(int, int, MPI_Comm, const char*, long, const char*, const char*);
+extern void check_API_parameter_bool(int, int, MPI_Comm, const char *, bool, const char *, const char *);
 extern void check_API_parameter_data_array(int, int, MPI_Comm, const char *, int, int, const char *, const char *, const char *);
 extern void check_API_parameter_timer(int, int, MPI_Comm, const char*, int, const char*, const char*);
 extern void check_API_parameter_field_instance(int, int, MPI_Comm, const char*, int, const char*, const char*);

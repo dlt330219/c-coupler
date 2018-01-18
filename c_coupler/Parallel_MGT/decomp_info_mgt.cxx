@@ -50,7 +50,7 @@ Decomp_info::Decomp_info(const char *decomp_name, int decomp_id, int host_comp_i
     else {
         EXECUTION_REPORT_LOG(REPORT_LOG, host_comp_id, true, 
 			             "parallel decomposition \"%s\" on the grid \"%s\" has %d local grid cells", 
-			             decomp_name, original_grid_mgr->search_grid_info(grid_id)->get_grid_name());
+			             decomp_name, original_grid_mgr->search_grid_info(grid_id)->get_grid_name(), num_local_cells);
         local_cell_global_indx = new int [num_local_cells];
         for (i = 0; i < num_local_cells; i ++) {
 			if (cell_indexes_in_decomp[i] == CCPL_NULL_INT)

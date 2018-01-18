@@ -21,8 +21,10 @@ H2D_remapping_wgt_file_info::H2D_remapping_wgt_file_info(const char *wgt_file_na
 	wgts_values = NULL;
 	src_center_lon = NULL;
 	src_center_lat = NULL;
+	src_area = NULL;
 	dst_center_lon = NULL;
 	dst_center_lat = NULL;
+	dst_area = NULL;
 	checksum_src_mask = -1;
 	checksum_dst_mask = -1;
 	src_grid_size = -1;
@@ -47,8 +49,10 @@ H2D_remapping_wgt_file_info::H2D_remapping_wgt_file_info(const char *array, long
 	wgts_values = NULL;	
 	src_center_lon = NULL;
 	src_center_lat = NULL;
+	src_area = NULL;
 	dst_center_lon = NULL;
 	dst_center_lat = NULL;
+	dst_area = NULL;
 	checksum_src_mask = -1;
 	checksum_dst_mask = -1;
 	src_grid_size = -1;
@@ -87,57 +91,59 @@ long H2D_remapping_wgt_file_info::get_grid_field_checksum_value(const char *fiel
 
 bool H2D_remapping_wgt_file_info::match_H2D_remapping_wgt(Original_grid_info *src_original_grid, Original_grid_info *dst_original_grid)
 {
-	read_src_grid_size(dst_original_grid->get_comp_id());
+	read_grid_size(dst_original_grid->get_comp_id(), "n_a", src_grid_size);
 	if (src_grid_size != src_original_grid->get_H2D_sub_CoR_grid()->get_grid_size()) {
 		clean();
 		return false;
 	}
-	read_dst_grid_size(dst_original_grid->get_comp_id());
+	read_grid_size(dst_original_grid->get_comp_id(), "n_b", dst_grid_size);
 	if (dst_grid_size != dst_original_grid->get_H2D_sub_CoR_grid()->get_grid_size()) {
 		clean();
 		return false;
 	}
-	get_checksum_src_mask(dst_original_grid->get_comp_id());
+	get_checksum_mask(dst_original_grid->get_comp_id(), "mask_a", src_grid_size, checksum_src_mask);
 	if (src_original_grid->get_checksum_H2D_mask() != this->checksum_src_mask) {
 		clean();
 		return false;
 	}
-	get_checksum_dst_mask(dst_original_grid->get_comp_id());
+	get_checksum_mask(dst_original_grid->get_comp_id(), "mask_b", dst_grid_size, checksum_dst_mask);
 	if (dst_original_grid->get_checksum_H2D_mask() != this->checksum_dst_mask) {
 		clean();
 		return false;
 	}
-	read_src_center_lon(dst_original_grid->get_comp_id());
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "xc_a", DATA_TYPE_DOUBLE, (void**)(&src_center_lon), src_grid_size);
 	if (!are_two_coord_arrays_same(src_original_grid->get_center_lon_values(), this->src_center_lon, src_original_grid->get_H2D_sub_CoR_grid()->get_grid_size(), this->src_grid_size)) {
 		clean();
 		return false;
 	}
-	read_dst_center_lon(dst_original_grid->get_comp_id());
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "xc_b", DATA_TYPE_DOUBLE, (void**)(&dst_center_lon), dst_grid_size);
 	if (!are_two_coord_arrays_same(dst_original_grid->get_center_lon_values(), this->dst_center_lon, dst_original_grid->get_H2D_sub_CoR_grid()->get_grid_size(), this->dst_grid_size)) {
 		clean();
 		return false;
 	}
-	read_src_center_lat(dst_original_grid->get_comp_id());
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "yc_a", DATA_TYPE_DOUBLE, (void**)(&src_center_lat), src_grid_size);
 	if (!are_two_coord_arrays_same(src_original_grid->get_center_lat_values(), this->src_center_lat, src_original_grid->get_H2D_sub_CoR_grid()->get_grid_size(), this->src_grid_size)) {
 		clean();
 		return false;
 	}
-	read_dst_center_lat(dst_original_grid->get_comp_id());
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "yc_b", DATA_TYPE_DOUBLE, (void**)(&dst_center_lat), dst_grid_size);
 	if (!are_two_coord_arrays_same(dst_original_grid->get_center_lat_values(), this->dst_center_lat, dst_original_grid->get_H2D_sub_CoR_grid()->get_grid_size(), this->dst_grid_size)) {
 		clean();
 		return false;
 	}
 	clean();
-	
+
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "area_a", DATA_TYPE_DOUBLE, (void**)(&src_area), src_grid_size);
+	read_weight_grid_data(dst_original_grid->get_comp_id(), "area_b", DATA_TYPE_DOUBLE, (void**)(&dst_area), dst_grid_size);
 	read_remapping_weights(dst_original_grid->get_comp_id());
 	return true;
 }
 
 
-void H2D_remapping_wgt_file_info::get_checksum_src_mask(int comp_id)
+void H2D_remapping_wgt_file_info::get_checksum_mask(int comp_id, const char *mask_label, int grid_size, long &checksum_mask)
 {
 	int local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	int wgts_status_tag = checksum_src_mask != -1? 1 : 0;
+	int wgts_status_tag = checksum_mask != -1? 1 : 0;
 	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
 	MPI_Comm file_read_comm;
 
@@ -151,48 +157,18 @@ void H2D_remapping_wgt_file_info::get_checksum_src_mask(int comp_id)
 	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
 	
 	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);	
-	src_grid_size = netcdf_file_object->get_dimension_size("n_a", file_read_comm, local_proc_id_in_file_read_comm == 0);
-	checksum_src_mask = get_grid_field_checksum_value("mask_a", netcdf_file_object, src_grid_size, file_read_comm, local_proc_id_in_file_read_comm == 0);	
+	checksum_mask = get_grid_field_checksum_value(mask_label, netcdf_file_object, grid_size, file_read_comm, local_proc_id_in_file_read_comm == 0);	
 	delete netcdf_file_object;
 	
 	MPI_Comm_free(&file_read_comm);
 }
 
 
-void H2D_remapping_wgt_file_info::get_checksum_dst_mask(int comp_id)
-{
-	int local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	int wgts_status_tag = checksum_dst_mask != -1? 1 : 0;
-	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
-	MPI_Comm file_read_comm;
-
-
-	MPI_Comm_split(comp_node->get_comm_group(), wgts_status_tag, 0, &file_read_comm);
-	if (wgts_status_tag == 1) {
-		MPI_Comm_free(&file_read_comm);
-		return;
-	}
-	MPI_Comm_rank(file_read_comm, &local_proc_id_in_file_read_comm);
-	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
-	
-	if (num_procs_in_file_read_comm < comp_node->get_num_procs()) {
-		EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Partially load remapping weight file %s", wgt_file_name);
-	}
-	else EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Load remapping weight file %s", wgt_file_name);
-	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);	
-	dst_grid_size = netcdf_file_object->get_dimension_size("n_b", file_read_comm, local_proc_id_in_file_read_comm == 0);
-	checksum_dst_mask = get_grid_field_checksum_value("mask_b", netcdf_file_object, dst_grid_size, file_read_comm, local_proc_id_in_file_read_comm == 0);	
-	delete netcdf_file_object;
-	
-	MPI_Comm_free(&file_read_comm);
-}
-
-
-void H2D_remapping_wgt_file_info::read_src_grid_size(int comp_id)
+void H2D_remapping_wgt_file_info::read_grid_size(int comp_id, const char *label, int &grid_size)
 {
 	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
 	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = src_grid_size != -1? 1 : 0;
+	int wgts_status_tag = grid_size != -1? 1 : 0;
 	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
 	MPI_Comm file_read_comm;
 
@@ -206,43 +182,18 @@ void H2D_remapping_wgt_file_info::read_src_grid_size(int comp_id)
 	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
 
 	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	src_grid_size = netcdf_file_object->get_dimension_size("n_a", file_read_comm, local_proc_id_in_file_read_comm == 0);
+	grid_size = netcdf_file_object->get_dimension_size(label, file_read_comm, local_proc_id_in_file_read_comm == 0);
 	delete netcdf_file_object;
 
 	MPI_Comm_free(&file_read_comm);
 }
-
-
-void H2D_remapping_wgt_file_info::read_dst_grid_size(int comp_id)
-{
-	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = dst_grid_size != -1? 1 : 0;
-	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
-	MPI_Comm file_read_comm;
-
-
-	MPI_Comm_split(comp_node->get_comm_group(), wgts_status_tag, 0, &file_read_comm);
-	if (wgts_status_tag == 1) {
-		MPI_Comm_free(&file_read_comm);
-		return;
-	}
-	MPI_Comm_rank(file_read_comm, &local_proc_id_in_file_read_comm);
-	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
-
-	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	dst_grid_size = netcdf_file_object->get_dimension_size("n_b", file_read_comm, local_proc_id_in_file_read_comm == 0);
-	delete netcdf_file_object;
-
-	MPI_Comm_free(&file_read_comm);
-}
-
 			
-void H2D_remapping_wgt_file_info::read_src_center_lon(int comp_id)
+
+void H2D_remapping_wgt_file_info::read_weight_grid_data(int comp_id, const char *label, const char *required_data_type, void **buffer_ptr, int buffer_size)
 {
 	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
 	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = src_center_lon != NULL? 1 : 0;
+	int wgts_status_tag = (*buffer_ptr) != NULL? 1 : 0;
 	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
 	MPI_Comm file_read_comm;
 
@@ -256,92 +207,14 @@ void H2D_remapping_wgt_file_info::read_src_center_lon(int comp_id)
 	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
 
 	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	netcdf_file_object->read_file_field("xc_a", (void**)(&src_center_lon), &field_size, data_type, file_read_comm, local_proc_id_in_file_read_comm == 0);
-	EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), field_size == src_grid_size && words_are_the_same(data_type, DATA_TYPE_DOUBLE), "Error happens when reading the remapping weights file \"%s\": fail to read the variable \"xc_a\" because of wrong array size (should be dimension of \"n_a\") or wrong data type (should be double). Please verify.", wgt_file_name);
+	netcdf_file_object->read_file_field(label, buffer_ptr, &field_size, data_type, file_read_comm, local_proc_id_in_file_read_comm == 0);
+	EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), field_size == buffer_size && words_are_the_same(data_type, required_data_type), "Error happens when reading the remapping weights file \"%s\": fail to read the variable \"%s\" because of wrong array size or wrong data type (should be %s). Please verify.", wgt_file_name, label, required_data_type);
 	delete netcdf_file_object;
 
 	MPI_Comm_free(&file_read_comm);
 }
 
-
-void H2D_remapping_wgt_file_info::read_src_center_lat(int comp_id)
-{
-	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = src_center_lat != NULL? 1 : 0;
-	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
-	MPI_Comm file_read_comm;
-
-
-	MPI_Comm_split(comp_node->get_comm_group(), wgts_status_tag, 0, &file_read_comm);
-	if (wgts_status_tag == 1) {
-		MPI_Comm_free(&file_read_comm);
-		return;
-	}
-	MPI_Comm_rank(file_read_comm, &local_proc_id_in_file_read_comm);
-	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
-
-	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	netcdf_file_object->read_file_field("yc_a", (void**)(&src_center_lat), &field_size, data_type, file_read_comm, local_proc_id_in_file_read_comm == 0);
-	EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), field_size == src_grid_size && words_are_the_same(data_type, DATA_TYPE_DOUBLE), "Error happens when reading the remapping weights file \"%s\": fail to read the variable \"yc_a\" because of wrong array size (should be dimension of \"n_a\") or wrong data type (should be double). Please verify.", wgt_file_name);
-	delete netcdf_file_object;
-
-	MPI_Comm_free(&file_read_comm);
-}
-
-
-void H2D_remapping_wgt_file_info::read_dst_center_lon(int comp_id)
-{
-	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = dst_center_lon != NULL? 1 : 0;
-	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
-	MPI_Comm file_read_comm;
-
-
-	MPI_Comm_split(comp_node->get_comm_group(), wgts_status_tag, 0, &file_read_comm);
-	if (wgts_status_tag == 1) {
-		MPI_Comm_free(&file_read_comm);
-		return;
-	}
-	MPI_Comm_rank(file_read_comm, &local_proc_id_in_file_read_comm);
-	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
-
-	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	netcdf_file_object->read_file_field("xc_b", (void**)(&dst_center_lon), &field_size, data_type, file_read_comm, local_proc_id_in_file_read_comm == 0);
-	EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), field_size == dst_grid_size && words_are_the_same(data_type, DATA_TYPE_DOUBLE), "Error happens when reading the remapping weights file \"%s\": fail to read the variable \"xc_b\" because of wrong array size (should be dimension of \"n_b\") or wrong data type (should be double). Please verify.", wgt_file_name);
-	delete netcdf_file_object;
-
-	MPI_Comm_free(&file_read_comm);
-}
-
-
-void H2D_remapping_wgt_file_info::read_dst_center_lat(int comp_id)
-{
-	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
-	char data_type[NAME_STR_SIZE];
-	int wgts_status_tag = dst_center_lat != NULL? 1 : 0;
-	Comp_comm_group_mgt_node *comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in H2D_remapping_wgt_file_info::read_remapping_weights");
-	MPI_Comm file_read_comm;
-
-
-	MPI_Comm_split(comp_node->get_comm_group(), wgts_status_tag, 0, &file_read_comm);
-	if (wgts_status_tag == 1) {
-		MPI_Comm_free(&file_read_comm);
-		return;
-	}
-	MPI_Comm_rank(file_read_comm, &local_proc_id_in_file_read_comm);
-	MPI_Comm_size(file_read_comm, &num_procs_in_file_read_comm);
-
-	IO_netcdf *netcdf_file_object = new IO_netcdf("remapping weights file for H2D interpolation", wgt_file_name, "r", false);
-	netcdf_file_object->read_file_field("yc_b", (void**)(&dst_center_lat), &field_size, data_type, file_read_comm, local_proc_id_in_file_read_comm == 0);
-	EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), field_size == dst_grid_size && words_are_the_same(data_type, DATA_TYPE_DOUBLE), "Error happens when reading the remapping weights file \"%s\": fail to read the variable \"yc_b\" because of wrong array size (should be dimension of \"n_b\") or wrong data type (should be double). Please verify.", wgt_file_name);
-	delete netcdf_file_object;
-
-	MPI_Comm_free(&file_read_comm);
-}
-
-			
+	
 void H2D_remapping_wgt_file_info::read_remapping_weights(int comp_id)
 {
 	int field_size, i, local_proc_id_in_file_read_comm, num_procs_in_file_read_comm;
@@ -420,6 +293,14 @@ void H2D_remapping_wgt_file_info::clean()
 		delete [] dst_center_lat;
 		dst_center_lat = NULL;		
 	}
+	if (src_area != NULL) {
+		delete [] src_area;
+		src_area = NULL;
+	}
+	if (dst_area != NULL) {
+		delete [] dst_area;
+		dst_area = NULL;
+	}
 }
 
 
@@ -438,13 +319,15 @@ H2D_remapping_wgt_file_mgt::H2D_remapping_wgt_file_mgt(TiXmlElement *XML_element
 	sprintf(overall_XML_file_name, "%s/all/overall_remapping_configuration.xml", comp_comm_group_mgt_mgr->get_config_root_dir());
 	
 	for (TiXmlNode *detailed_element_node = XML_element->FirstChild(); detailed_element_node != NULL; detailed_element_node = detailed_element_node->NextSibling()) {
+		if (detailed_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *detailed_element = detailed_element_node->ToElement();
 		EXECUTION_REPORT(REPORT_ERROR, comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), words_are_the_same(detailed_element->Value(), "file"), "When setting a remapping weights file in the remapping configuration in the XML file \"%s\", \"%s\" is not a legal attribute. Please verify the XML file arround the line number %d.", XML_file_name, detailed_element->Value(), detailed_element->Row());
 		const char *short_file_name = get_XML_attribute(comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id(), 1000, detailed_element, "name", XML_file_name, line_number, "the name of a remapping weights file",  "remapping configuration");
 		char full_file_name[NAME_STR_SIZE];
 		if (words_are_the_same(overall_XML_file_name, XML_file_name))
 			sprintf(full_file_name, "%s/all/grids_weights/%s", comp_comm_group_mgt_mgr->get_config_root_dir(), short_file_name);
-		else sprintf(full_file_name, "%s/grids_weights/%s", comp_comm_group_mgt_mgr->get_first_active_comp_config_dir(), short_file_name);
+		else sprintf(full_file_name, "%s/grids_weights/%s", comp_comm_group_mgt_mgr->get_root_comp_config_dir(), short_file_name);
 		H2D_remapping_wgt_file_info *existing_wgt_file_info = all_H2D_remapping_wgt_files_info->search_wgt_file_info(full_file_name);
 		if (existing_wgt_file_info == NULL) {
 			H2D_remapping_wgt_files.push_back(new H2D_remapping_wgt_file_info(full_file_name));
@@ -604,6 +487,8 @@ Remapping_algorithm_specification::Remapping_algorithm_specification(int comp_id
 
 	this->algorithm_name = strdup(algorithm_name);
 	for (TiXmlNode *detailed_element_node = XML_element->FirstChild(); detailed_element_node != NULL; detailed_element_node = detailed_element_node->NextSibling()) {
+		if (detailed_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *detailed_element = detailed_element_node->ToElement();
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, words_are_the_same(detailed_element->Value(), "parameter"), "When setting the remapping configuration in the XML file \"%s\", \"%s\" is not a legal attribute. Please verify the XML file arround the line number %d.", XML_file_name, detailed_element->Value(), detailed_element->Row());
 		const char *parameter_name = get_XML_attribute(comp_id, -1, detailed_element, "name", XML_file_name, line_number, "the name of a parameter of the corresponding remapping algorithm",  "remapping configuration");
@@ -765,12 +650,16 @@ Remapping_setting::Remapping_setting(int comp_id, TiXmlElement *XML_element, con
 	H2D_remapping_wgt_file_mgr = NULL;
 	
 	for (TiXmlNode *detailed_element_node = XML_element->FirstChild(); detailed_element_node != NULL; detailed_element_node = detailed_element_node->NextSibling()) {
+		if (detailed_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *detailed_element = detailed_element_node->ToElement();
 		if (words_are_the_same(detailed_element->Value(), "remapping_algorithms")) {		
 			if (!is_XML_setting_on(comp_id, detailed_element, XML_file_name, "the status of the configuration of a section about remapping algorithms", "remapping configuration"))
 				continue;
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, num_remapping_algorithm_section == 0, "When setting the remapping configuration in the XML file \"%s\", there are more than one section for specifying remapping algorithms. That is not allowed. Please verify the XML file arround the line number %d", XML_file_name, detailed_element->Row());		
 			for (TiXmlNode *algorithm_element_node = detailed_element_node->FirstChild(); algorithm_element_node != NULL; algorithm_element_node = algorithm_element_node->NextSibling()) {
+				if (algorithm_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+					continue;
 				TiXmlElement *algorithm_element = algorithm_element_node->ToElement();
 				if (words_are_the_same(algorithm_element->Value(), "H2D_algorithm")) {
 					if (!is_XML_setting_on(comp_id, algorithm_element, XML_file_name, "the status of the configuration of a section about H2D_algorithm", "remapping configuration"))
@@ -804,6 +693,8 @@ Remapping_setting::Remapping_setting(int comp_id, TiXmlElement *XML_element, con
 			if (words_are_the_same(specification_type, "type")) {
 				field_specification_manner = 1;
 				for (TiXmlNode *type_element_node = detailed_element_node->FirstChild(); type_element_node != NULL; type_element_node = type_element_node->NextSibling()) {
+					if (type_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+						continue;
 					TiXmlElement *type_element = type_element_node->ToElement();
 					const char *field_type = get_XML_attribute(comp_id, -1, type_element, "value", XML_file_name, line_number, "the field type corresponding to a remapping setting", "remapping configuration");
 					EXECUTION_REPORT(REPORT_ERROR, comp_id, words_are_the_same(field_type, "state") || words_are_the_same(field_type, "flux"), "In the XML file \"%s\" for remapping configuration, the field type \"%s\" is wrong. C-Coupler only supports field types \"state\" and \"flux\" at this time. Please verify the XML file arround the line number %d.", XML_file_name, field_type, line_number);
@@ -817,6 +708,8 @@ Remapping_setting::Remapping_setting(int comp_id, TiXmlElement *XML_element, con
 			else {
 				field_specification_manner = 2;
 				for (TiXmlNode *field_element_node = detailed_element_node->FirstChild(); field_element_node != NULL; field_element_node = field_element_node->NextSibling()) {
+					if (field_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+						continue;
 					TiXmlElement *field_element = field_element_node->ToElement();
 					const char *field_name = get_XML_attribute(comp_id, 80, field_element, "value", XML_file_name, line_number, "the field name corresponding to a remapping setting", "remapping configuration");
 					for (i = 0; i < fields_specification.size(); i ++)
@@ -1078,6 +971,8 @@ Remapping_configuration::Remapping_configuration(int comp_id, const char *XML_fi
 {
 	this->comp_id = comp_id;
 	for (TiXmlNode *XML_element_node = get_XML_first_child_of_unique_root(comp_id,XML_file_name,XML_file); XML_element_node != NULL; XML_element_node = XML_element_node->NextSibling()) {
+		if (XML_element_node->Type() != TiXmlNode::TINYXML_ELEMENT)
+			continue;
 		TiXmlElement *XML_element = XML_element_node->ToElement();
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, words_are_the_same(XML_element->Value(), "remapping_setting"), "\"%s\" is not a legal attribute (the legal is \"remapping_setting\") for defining a remapping setting. Please verify the XML file arround the line number %d.", XML_element->Value(), XML_element->Row());
 		if (!is_XML_setting_on(comp_id, XML_element, XML_file_name, "the status of a remapping setting", "remapping configuration"))
@@ -1142,7 +1037,7 @@ void Remapping_configuration_mgt::add_remapping_configuration(int comp_id)
 	Comp_comm_group_mgt_node *current_comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id,"in Remapping_configuration_mgt::add_remapping_configuration");
 	if (comp_id == comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id())
 		sprintf(XML_file_name, "%s/all/overall_remapping_configuration.xml", comp_comm_group_mgt_mgr->get_config_root_dir());
-	else sprintf(XML_file_name, "%s/remapping_configs/%s.remapping_configuration.xml", comp_comm_group_mgt_mgr->get_first_active_comp_config_dir(), comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id,"in Remapping_configuration_mgt::add_remapping_configuration")->get_full_name());
+	else sprintf(XML_file_name, "%s/remapping_configs/%s.remapping_configuration.xml", comp_comm_group_mgt_mgr->get_root_comp_config_dir(), comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id,"in Remapping_configuration_mgt::add_remapping_configuration")->get_full_name());
 	TiXmlDocument *XML_file = open_XML_file_to_read(comp_id, XML_file_name, comp_comm_group_mgt_mgr->get_comm_group_of_local_comp(comp_id,"in Remapping_configuration::Remapping_configuration"), false);
 	if (XML_file == NULL) {
 		EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "The remapping configuration file \"%s\" for the current component does not exist.", XML_file_name);

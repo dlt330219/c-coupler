@@ -1085,7 +1085,7 @@ bool TiXmlDocument::LoadFile( FILE* file, MPI_Comm comm, TiXmlEncoding encoding 
 	}
 	
 	if (comm != -1) {
-		MPI_Bcast(&length, 1, MPI_INT, 0, comm);
+		MPI_Bcast(&length, 1, MPI_LONG, 0, comm);
 		if (buf == NULL)
 			buf = new char[ length+1 ];
 		MPI_Bcast(buf, length+1, MPI_CHAR, 0, comm);

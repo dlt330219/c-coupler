@@ -25,6 +25,7 @@ class Runtime_trans_algorithm
         int remote_proc_idx_begin;
         bool send_or_receive;    // true means send and false means receive
         int comp_id;
+		Comp_comm_group_mgt_node *comp_node;
         int num_transfered_fields;
         Field_mem_info **fields_mem;
         void **fields_data_buffers;
@@ -57,7 +58,8 @@ class Runtime_trans_algorithm
         std::vector<bool> history_receive_buffer_status;
         std::vector<long> history_receive_sender_time;
         std::vector<long> history_receive_usage_time;
-        std::vector<void*> history_receive_data_buffer;
+        char *temp_receive_data_buffer;
+		std::vector<std::vector<Field_mem_info *> > history_receive_fields_mem;
         long last_receive_sender_time;
         int last_history_receive_buffer_index;
         Comp_comm_group_mgt_node * local_comp_node;
@@ -75,6 +77,7 @@ class Runtime_trans_algorithm
         int num_recv_procs_related;
         int recv_proc_start;
 		int bypass_counter;
+		bool timer_not_bypassed;
 
         bool send(bool);
         bool recv(bool);
@@ -83,7 +86,7 @@ class Runtime_trans_algorithm
         bool set_local_tags();
         void preprocess();
         void pack_MD_data(int, int, int *);
-        void unpack_MD_data(void *, int, int, int *);
+        void unpack_MD_data(void *, int, int, void*, int *);
         template <class T> void pack_segment_data(T *, T *, int, int, int, int, bool);
         template <class T> void unpack_segment_data(T *, T *, int, int, int, int, bool);
 
@@ -100,7 +103,7 @@ class Runtime_trans_algorithm
         void pass_transfer_parameters(long, int);
         void set_data_win(MPI_Win win) {data_win = win;}
         void set_tag_win(MPI_Win win) {tag_win = win;}
-        void receve_data_in_temp_buffer();
+        void receive_data_in_temp_buffer();
         long get_history_receive_sender_time(int);
 };
 

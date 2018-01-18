@@ -41,12 +41,21 @@ void get_API_hint(int comp_id, int API_id, char *API_label)
         case API_ID_COMP_MGT_REG_COMP:
 			sprintf(API_label, "CCPL_register_component");
 			break;
+		case API_ID_COMP_MGT_GET_COMP_LOG_FILE_NAME:
+			sprintf(API_label, "CCPL_get_comp_log_file_name");
+			break;			
+		case API_ID_COMP_MGT_GET_COMP_LOG_FILE_DEVICE:
+			sprintf(API_label, "CCPL_get_comp_log_file_device");
+			break;
         case API_ID_COMP_MGT_END_COMP_REG:
 			sprintf(API_label, "CCPL_end_coupling_configuration");
 			break;
 		case API_ID_COMP_MGT_GET_COMP_ID:
 			sprintf(API_label, "CCPL_get_component_id");
 			break;
+		case API_ID_COMP_MGT_IS_COMP_TYPE_COUPLED:
+			sprintf(API_label, "CCPL_is_comp_type_coupled");
+			break;			
 		case API_ID_COMP_MGT_IS_CURRENT_PROC_IN_COMP:
 			sprintf(API_label, "CCPL_is_current_process_in_component");
 			break;
@@ -104,6 +113,9 @@ void get_API_hint(int comp_id, int API_id, char *API_label)
         case API_ID_GRID_MGT_GET_H2D_GRID_DATA:
 			sprintf(API_label, "CCPL_get_H2D_grid_data");
 			break;
+		case API_ID_GRID_MGT_GET_H2D_GRID_AREA_FROM_WGTS:
+			sprintf(API_label, "CCPL_get_H2D_grid_area_in_remapping_wgts");
+			break;
         case API_ID_GRID_MGT_REG_MID_POINT_GRID:
 			sprintf(API_label, "CCPL_register_mid_point_grid");
 			break;
@@ -128,6 +140,9 @@ void get_API_hint(int comp_id, int API_id, char *API_label)
 		case API_ID_TIME_MGT_SET_TIME_STEP:
 			sprintf(API_label, "CCPL_set_time_step");
 			break;
+		case API_ID_TIME_MGT_RESET_TIME_TO_START:
+			sprintf(API_label, "CCPL_reset_current_time_to_start_time");
+			break;			
 		case API_ID_TIME_MGT_ADVANCE_TIME:
 			sprintf(API_label, "CCPL_advance_time");
 			break;
@@ -194,6 +209,9 @@ void get_API_hint(int comp_id, int API_id, char *API_label)
 		case API_ID_TIME_MGT_IS_MODEL_RUN_ENDED:
 			sprintf(API_label, "CCPL_is_model_run_ended");
 			break;
+		case API_ID_TIME_MGT_IS_MODEL_LAST_STEP:
+			sprintf(API_label, "CCPL_is_last_step_of_model_run");
+			break;			
 		case API_ID_INTERFACE_REG_IMPORT:
 			sprintf(API_label, "CCPL_register_import_interface");
 			break;
@@ -206,8 +224,14 @@ void get_API_hint(int comp_id, int API_id, char *API_label)
 		case API_ID_INTERFACE_REG_FRAC_REMAP:
 			sprintf(API_label, "CCPL_register_frac_based_remap_interface");
 			break;
-		case API_ID_INTERFACE_EXECUTE:
-			sprintf(API_label, "CCPL_execute_interface");
+		case API_ID_INTERFACE_EXECUTE_WITH_ID:
+			sprintf(API_label, "CCPL_execute_interface_using_id");
+			break;
+		case API_ID_INTERFACE_EXECUTE_WITH_NAME:
+			sprintf(API_label, "CCPL_execute_interface_using_name");
+			break;
+		case API_ID_INTERFACE_CHECK_IMPORT_FIELD_CONNECTED:
+			sprintf(API_label, "CCPL_check_is_import_field_connected");
 			break;
 		case API_ID_INTERFACE_GET_LOCAL_COMP_FULL_NAME:
 			sprintf(API_label, "CCPL_get_local_comp_full_name");
@@ -342,6 +366,7 @@ template <class T> void check_API_parameter_scalar(int comp_id, int API_id, MPI_
 
 	EXECUTION_REPORT(REPORT_ERROR, -1, MPI_Comm_rank(comm, &local_process_id) == MPI_SUCCESS);
 	EXECUTION_REPORT(REPORT_ERROR, -1, MPI_Comm_size(comm, &num_processes) == MPI_SUCCESS);	
+
 	values = new T [num_processes];
 	if (sizeof(T) == 1)
 		EXECUTION_REPORT(REPORT_ERROR, -1, MPI_Gather(&value, 1, MPI_CHAR, values, 1, MPI_CHAR, 0, comm) == MPI_SUCCESS);
@@ -356,7 +381,7 @@ template <class T> void check_API_parameter_scalar(int comp_id, int API_id, MPI_
 		get_API_hint(comp_id, API_id, API_label);
 		for (i = 1; i < num_processes; i ++) {
 			if (hint != NULL)
-				EXECUTION_REPORT(REPORT_ERROR, comp_id, values[0] == values[i], "Error happens when calling API \"%s\": %s of parameter %s is not consistent among processes of component \"%s\". Please check the model code related to the annotation \"%s\"",
+				EXECUTION_REPORT(REPORT_ERROR, comp_id, values[0] == values[i], "Error happens when calling API \"%s\" for %s: parameter %s is not consistent among processes of component \"%s\". Please check the model code related to the annotation \"%s\"",
 				                 API_label, hint, parameter_name, comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_comp_name(), annotation);
 			else EXECUTION_REPORT(REPORT_ERROR, comp_id, values[0] == values[i], "Error happens when calling API \"%s\": parameter %s is not consistent among processes of component \"%s\". Please check the model code related to the annotation \"%s\"",
 				                  API_label, parameter_name, comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_comp_name(), annotation);
@@ -518,6 +543,12 @@ void check_API_parameter_double(int comp_id, int API_id, MPI_Comm comm, const ch
 }
 
 
+void check_API_parameter_bool(int comp_id, int API_id, MPI_Comm comm, const char *hint, bool value, const char *parameter_name, const char *annotation)
+{
+	check_API_parameter_scalar(comp_id, API_id, comm, hint, value, parameter_name, annotation);
+}
+
+
 void check_API_parameter_int(int comp_id, int API_id, MPI_Comm comm, const char *hint, int value, const char *parameter_name, const char *annotation)
 {
 	check_API_parameter_scalar(comp_id, API_id, comm, hint, value, parameter_name, annotation);
@@ -672,7 +703,7 @@ const char *get_XML_attribute(int comp_id, int max_string_length, TiXmlElement *
 {
 	const char *attribute_value = XML_element->Attribute(attribute_keyword, &line_number);
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, attribute_value != NULL, "In the XML file \"%s\" that is for %s, %s (the keyword is \"%s\") has not been specified. Please verify the XML file arround the line number %d.", 
-		             XML_file_name, XML_file_annotation, attribute_annotation, attribute_keyword, line_number);
+		             XML_file_name, XML_file_annotation, attribute_annotation, attribute_keyword, XML_element->Row());
 	EXECUTION_REPORT(REPORT_ERROR, comp_id, strlen(attribute_value) > 0, "In the XML file \"%s\" that is for %s, %s (the keyword is \"%s\") has been specified but with an empty string. Please verify the XML file arround the line number %d.", 
 		             XML_file_name, XML_file_annotation, attribute_annotation, attribute_keyword, line_number);
 	if (max_string_length > 0)	
@@ -714,8 +745,11 @@ void gather_array_in_one_comp(int num_total_local_proc, int current_proc_local_i
 {
     int *displs = new int [num_total_local_proc];
 	int *counts = new int [num_total_local_proc];
+	bool all_array_size_empty = all_array_size == NULL;
 
-	
+
+	if (all_array_size_empty)
+		all_array_size = new int [num_total_local_proc];
     MPI_Gather(&local_array_size, 1, MPI_INT, all_array_size, 1, MPI_INT, 0, comm);
 	global_size = 0;
     if (current_proc_local_id == 0) {
@@ -731,6 +765,8 @@ void gather_array_in_one_comp(int num_total_local_proc, int current_proc_local_i
     }
     MPI_Gatherv(local_array, local_array_size*data_type_size, MPI_CHAR, *global_array, counts, displs, MPI_CHAR, 0, comm);
 
+	if (all_array_size_empty)
+		delete [] all_array_size;
     delete [] displs;
     delete [] counts;
 }

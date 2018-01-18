@@ -58,10 +58,11 @@ class Coupling_connection
 		friend class Coupling_generator;
 		friend class Connection_coupling_procedure;
 		friend class IO_output_procedure;
+		friend class Inout_interface;
 		friend class Inout_interface_mgt;
 		int connection_id;
 		std::vector<const char*> fields_name;
-		std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > src_comp_interfaces;
+		std::vector<std::pair<const char*, const char*> > src_comp_interfaces;
 		char dst_comp_full_name[NAME_STR_SIZE];
 		char dst_interface_name[NAME_STR_SIZE];
 		std::vector<Interface_field_info*> src_fields_info;
@@ -76,6 +77,8 @@ class Coupling_connection
 		int dst_time_step_in_second;
 		int src_inst_or_aver;
 	    int dst_inst_or_aver;
+		int src_current_year, src_current_month, src_current_day, src_current_second;
+		int dst_current_year, dst_current_month, dst_current_day, dst_current_second;
 		Connection_coupling_procedure *import_procedure;
 		Connection_coupling_procedure *export_procedure;
 		Comp_comm_group_mgt_node *src_comp_node;
@@ -89,9 +92,9 @@ class Coupling_connection
         int * dst_proc_ranks_in_union_comm;
 
 		void write_field_info_into_array(Field_mem_info *, char **, long &, long &);
-		void write_connection_fields_info_into_array(Inout_interface *, char **, long &, long &, Coupling_timer**, int&, int&);	
+		void write_connection_fields_info_into_array(Inout_interface *, char **, long &, long &, Coupling_timer**, int&, int&, int&, int&, int&, int&);	
 		void read_fields_info_from_array(std::vector<Interface_field_info*> &, const char*, long);
-		void read_connection_fields_info_from_array(std::vector<Interface_field_info*>&, const char *, long, int, Coupling_timer **, int &, int &);
+		void read_connection_fields_info_from_array(std::vector<Interface_field_info*>&, const char *, long, int, Coupling_timer **, int&, int&, int&, int&, int&, int&);
 		void exchange_connection_fields_info();
 		void exchange_bottom_fields_info();
 		void generate_interpolation(bool);
@@ -119,7 +122,7 @@ class Import_direction_setting
 		int fields_default_setting;       // 0 means off; 1 means all; 2 means remain"
 		int components_default_setting;  // 0 means off; 1 means all;
 		std::vector<const char*> fields_name;
-		std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > producers_info;
+		std::vector<std::pair<const char*, const char*> > producers_info;
 		
 		// ... remapping and merge setting;
 	
@@ -135,14 +138,14 @@ class Import_interface_configuration
 		char interface_name[NAME_STR_SIZE];
 		std::vector<Import_direction_setting*> import_directions;
 		std::vector<const char*> fields_name;
-		std::vector<std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> > > fields_src_producers_info;
+		std::vector<std::vector<std::pair<const char*, const char*> > > fields_src_producers_info;
 
 	public:
 		Import_interface_configuration(int, const char*, const char*, TiXmlElement*, const char*, Inout_interface_mgt *, bool);
 		~Import_interface_configuration();
 		const char *get_interface_name() { return interface_name; }
-		void add_field_src_component(int comp_id, const char*, std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]>);
-		void get_field_import_configuration(const char*, std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> >&);
+		void add_field_src_component(int comp_id, const char*, std::pair<const char*, const char*>);
+		void get_field_import_configuration(const char*, std::vector<std::pair<const char*, const char*> >&);
 };
 
 
@@ -155,7 +158,7 @@ class Component_import_interfaces_configuration
 	public:	
 		Component_import_interfaces_configuration(int, const char *, Inout_interface_mgt *, bool);
 		~Component_import_interfaces_configuration();
-		void get_interface_field_import_configuration(const char*, const char*, std::vector<std::pair<char[NAME_STR_SIZE],char[NAME_STR_SIZE]> >&);
+		void get_interface_field_import_configuration(const char*, const char*, std::vector<std::pair<const char*,const char*> >&);
 };
 
 
@@ -165,7 +168,8 @@ class Coupling_generator
 	private:
 		std::map<int,std::vector<std::pair<const char*, const char*> > > export_fields_dst_components;
 		std::vector<const char*> string_in_export_fields_dst_components;
-		std::vector<char *> all_comp_fullnames_for_coupling_generation;
+		std::vector<const char *> all_comp_fullnames_for_coupling_generation;
+		std::vector<int> individual_or_family_generation;  // must be 1 (individual) or 2 (family)
 		Dictionary<int> *import_field_index_lookup_table;
 		Dictionary<int> *export_field_index_lookup_table;
 		std::vector<Coupling_connection*> all_coupling_connections;
@@ -174,13 +178,14 @@ class Coupling_generator
 		
 		void generate_interface_fields_source_dst(const char*, int);
 		void generate_components_connections();		
-		void generate_coupling_procedures_common(MPI_Comm, bool);
+		void generate_coupling_procedures_common(int, MPI_Comm, bool, const char*);
+		void sort_comp_full_names(std::vector<const char*> &, std::vector<int>*);
 
 	public:
 		Coupling_generator() { latest_connection_id = 1; import_field_index_lookup_table = NULL; export_field_index_lookup_table = NULL; }
 		~Coupling_generator();
 		void clear();
-		void generate_coupling_procedures_internal(int, bool);
+		void generate_coupling_procedures_internal(int, bool, const char*);
         void generate_IO_procedures();
 		int apply_connection_id() {  return (++latest_connection_id); }
 		int get_latest_connection_id() { return latest_connection_id; }
@@ -188,10 +193,11 @@ class Coupling_generator
 		void synchronize_latest_connection_id(MPI_Comm);
 		void transfer_interfaces_info_from_one_component_to_another(std::vector<Inout_interface*> &, Comp_comm_group_mgt_node *, Comp_comm_group_mgt_node *);
 		void begin_external_coupling_generation();
-		void add_comp_for_external_coupling_generation(const char *, const char*);
-		void do_external_coupling_generation(const char*);
-		void load_comps_full_names_from_config_file(int, const char *, int, int *, const char *);
-		void get_one_comp_full_name(int, int, int, char *, const char *annotation);
+		void add_comp_for_external_coupling_generation(const char *, int, const char*);
+		void do_external_coupling_generation(int, const char*);
+		void load_comps_full_names_from_config_file(int, const char *, int, int, int *, const char *);
+		void get_one_comp_full_name(int, int, int, char *, int *, const char *);
+		void do_overall_coupling_generation(const char*, const char *);
 };
 
 

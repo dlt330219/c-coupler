@@ -10,7 +10,7 @@
 #ifndef COMMON_UTILS
 #define COMMON_UTILS
 
-#define NAME_STR_SIZE    512
+#define NAME_STR_SIZE    1024
 
 
 #include <stdio.h>

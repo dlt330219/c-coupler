@@ -18,8 +18,8 @@ template <class T1, class T2> void copy_data_values_for_IO(T1 *data_values_in_ap
     for (long i = 0; i < size; i ++) {
         data_values_in_io[i] = (T2) data_values_in_application[i];
         if (!is_restart_field && ((mask != NULL &&!mask[i]) || 
-            fabs(data_values_in_application[i]) >= 1.0e10 ||
-            (fabs(data_values_in_application[i]) <= 1.5*fabs(fill_value_in_application) && fabs(data_values_in_application[i]) >= 0.5*fabs(fill_value_in_application))))
+            fabs((double)data_values_in_application[i]) >= 1.0e10 ||
+            (fabs((double)data_values_in_application[i]) <= 1.5*fabs((double)fill_value_in_application) && fabs((double)data_values_in_application[i]) >= 0.5*fabs((double)fill_value_in_application))))
             data_values_in_io[i] = fill_value_in_io;
     }
 }
@@ -29,8 +29,8 @@ template <class T> void transfer_data_from_float_to_short(T *data_values_in_appl
 {
     for (long i = 0; i < size; i ++) {
         if ((mask != NULL &&!mask[i]) || 
-            fabs(data_values_in_application[i]) >= 1.0e10 ||
-            (fabs(data_values_in_application[i]) <= 1.5*fabs(fill_value_in_application) && fabs(data_values_in_application[i]) >= 0.5*fabs(fill_value_in_application)))
+            fabs((double)data_values_in_application[i]) >= 1.0e10 ||
+            (fabs((double)data_values_in_application[i]) <= 1.5*fabs((double)fill_value_in_application) && fabs((double)data_values_in_application[i]) >= 0.5*fabs((double)fill_value_in_application)))
             data_values_in_io[i] = fill_value_in_io;
         else data_values_in_io[i] = (data_values_in_application[i]-add_offset)/(scale_factor);
     }

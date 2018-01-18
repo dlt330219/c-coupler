@@ -86,7 +86,9 @@ Runtime_trans_algorithm::Runtime_trans_algorithm(bool send_or_receive, int num_t
     }
     strcpy(remote_comp_full_name, remote_comp_node->get_comp_full_name());
 	remote_comp_node_updated = false;
+	timer_not_bypassed = false;
     comp_id = local_comp_node->get_comp_id();
+	comp_node = comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id, "in Runtime_trans_algorithm::Runtime_trans_algorithm");
     current_proc_local_id = local_comp_node->get_current_proc_local_id();
     current_proc_global_id = comp_comm_group_mgt_mgr->get_current_proc_global_id();
     time_mgr = components_time_mgrs->get_time_mgr(comp_id);
@@ -162,10 +164,10 @@ Runtime_trans_algorithm::Runtime_trans_algorithm(bool send_or_receive, int num_t
              }
         }
         for (int j = 0; j < num_remote_procs; j ++)
-            send_displs_in_remote_procs[j] += sizeof(long)*2;
+            send_displs_in_remote_procs[j] += sizeof(long)*4;
     }
 
-    recv_displs_in_current_proc[0] = sizeof(long)*2;
+    recv_displs_in_current_proc[0] = sizeof(long)*4;
     for (int i = 1; i < num_remote_procs; i ++)
         recv_displs_in_current_proc[i] = recv_displs_in_current_proc[i-1] + transfer_size_with_remote_procs[i-1] + 2*sizeof(long);
 
@@ -175,12 +177,13 @@ Runtime_trans_algorithm::Runtime_trans_algorithm(bool send_or_receive, int num_t
     for (int j = 0; j < num_remote_procs; j ++) 
         data_buf_size += transfer_size_with_remote_procs[j];
 
-    total_buf_size = data_buf_size + (2*num_remote_procs + 2) * sizeof(long);
+    total_buf_size = data_buf_size + (2*num_remote_procs + 4) * sizeof(long);
     total_buf = (char*) (new long[(total_buf_size+sizeof(long)-1)/sizeof(long)]);
-    send_tag_buf = (long *) total_buf;
-    
-    send_tag_buf[0] = -1;
-	send_tag_buf[1] = -1;
+    send_tag_buf = (long *) total_buf;	
+	temp_receive_data_buffer = (char*)(new long [(data_buf_size+sizeof(long)-1)/sizeof(long)]);
+
+	for (int i = 0; i < 4; i ++)
+	    send_tag_buf[i] = -1;
     for (int i = 0; i < num_remote_procs; i ++) {
         tag_buf = (long *) (total_buf + recv_displs_in_current_proc[i]);
         for (int j = 0; j < 2; j ++)
@@ -229,10 +232,7 @@ Runtime_trans_algorithm::~Runtime_trans_algorithm()
     delete [] send_displs_in_remote_procs;
     delete [] recv_displs_in_current_proc;
     delete [] remote_proc_ranks_in_union_comm;
-
-    for (int i = 0; i < history_receive_sender_time.size(); i ++) {
-        delete [] history_receive_data_buffer[i];
-    }
+    delete [] temp_receive_data_buffer;
 }
 
 
@@ -248,6 +248,8 @@ bool Runtime_trans_algorithm::set_local_tags()
     MPI_Win_lock(MPI_LOCK_SHARED, current_proc_id_union_comm, 0, data_win);
     send_tag_buf[0] = current_field_local_recv_count;
 	send_tag_buf[1] = ((long)time_mgr->get_current_num_elapsed_day())*100000 + ((long)time_mgr->get_current_second());
+	send_tag_buf[2] = (long) time_mgr->get_runtype_mark();
+	send_tag_buf[3] = time_mgr->get_restart_full_time();
     current_field_local_recv_count ++;
     MPI_Win_unlock(current_proc_id_union_comm, data_win);
 
@@ -263,12 +265,6 @@ bool Runtime_trans_algorithm::is_remote_data_buf_ready(bool bypass_timer)
     if (index_remote_procs_with_common_data.size() == 0)
         return true;
 
-	if (comp_comm_group_mgt_mgr->get_is_definition_finalized() && !remote_comp_node_updated) {
-		remote_comp_node = comp_comm_group_mgt_mgr->search_global_node(remote_comp_full_name);
-		remote_comp_node_updated = true;
-		remote_comp_node->allocate_proc_latest_model_time();
-	}
-
     for (int i = 0; i < index_remote_procs_with_common_data.size(); i ++) {
         int remote_proc_index = index_remote_procs_with_common_data[i];
         if (transfer_size_with_remote_procs[remote_proc_index] > 0) {
@@ -278,7 +274,7 @@ bool Runtime_trans_algorithm::is_remote_data_buf_ready(bool bypass_timer)
 			}
             int remote_proc_id = remote_proc_ranks_in_union_comm[remote_proc_index];
             MPI_Win_lock(MPI_LOCK_SHARED, remote_proc_id, 0, data_win);
-            MPI_Get(send_tag_buf, sizeof(long)*2, MPI_CHAR, remote_proc_id, 0, sizeof(long)*2, MPI_CHAR, data_win);
+            MPI_Get(send_tag_buf, sizeof(long)*4, MPI_CHAR, remote_proc_id, 0, sizeof(long)*4, MPI_CHAR, data_win);
             MPI_Win_unlock(remote_proc_id, data_win);
 			if (remote_comp_node_updated)
 				remote_comp_node->set_proc_latest_model_time(remote_proc_index, send_tag_buf[1]);
@@ -300,11 +296,22 @@ bool Runtime_trans_algorithm::is_remote_data_buf_ready(bool bypass_timer)
     EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Remote buffer component \"%s\" is ready for receiving data: %ld vs %ld vs %ld : %d", remote_comp_full_name, temp_field_remote_recv_count, last_field_remote_recv_count, last_receive_sender_time, bypass_counter);	
 
 	last_field_remote_recv_count ++;
+
+	if (send_tag_buf[2] != -1) {
+		if (send_tag_buf[2] == RUNTYPE_MARK_INITIAL || send_tag_buf[2] == RUNTYPE_MARK_HYBRID) 
+			EXECUTION_REPORT(REPORT_ERROR, comp_id, time_mgr->get_runtype_mark() == RUNTYPE_MARK_INITIAL || time_mgr->get_runtype_mark() == RUNTYPE_MARK_HYBRID, "Inconsistency of run type between component models is detected: the component model \"%s\" is in an initial run or hybrid run, while the component model \"%s\" is in a continue run or branch run. Please verify.", remote_comp_full_name, local_comp_node->get_comp_full_name());
+		else {		
+			EXECUTION_REPORT(REPORT_ERROR, comp_id, time_mgr->get_runtype_mark() == RUNTYPE_MARK_CONTINUE || time_mgr->get_runtype_mark() != RUNTYPE_MARK_BRANCH, "Inconsistency of run type between component models is detected: the component model \"%s\" is in an initial run or hybrid run, while the component model \"%s\" is in a continue run or branch run. Please verify.", local_comp_node->get_comp_full_name(), remote_comp_full_name);
+			if (time_mgr->get_restart_full_time() != -1 && send_tag_buf[3] != -1)
+				EXECUTION_REPORT(REPORT_ERROR, comp_id, time_mgr->get_restart_full_time() == send_tag_buf[3], "The restart time between the two component models \"%s\" and \"%s\" are inconsistent: %ld vs %ld. Please verify.", local_comp_node->get_comp_full_name(), remote_comp_full_name, time_mgr->get_restart_full_time(), send_tag_buf[3]);
+		}
+	}
+	
     return true;
 }
 
 
-void Runtime_trans_algorithm::receve_data_in_temp_buffer()
+void Runtime_trans_algorithm::receive_data_in_temp_buffer()
 {
     bool is_ready = true;
 
@@ -330,10 +337,18 @@ void Runtime_trans_algorithm::receve_data_in_temp_buffer()
     if (last_receive_field_sender_time == current_receive_field_sender_time)
         return;
 
+	if (timer_not_bypassed) {
+		int comp_min_remote_lag_seconds = comp_node->get_min_remote_lag_seconds();
+		long current_receiver_full_seconds = ((long)time_mgr->get_current_num_elapsed_day())*86400 + time_mgr->get_current_second();
+		long current_sender_full_seconds = ((current_receive_field_sender_time%((long)100000000000000))/((long)100000))*86400 + (current_receive_field_sender_time%((long)100000));
+		if (current_sender_full_seconds + 2*comp_min_remote_lag_seconds > current_receiver_full_seconds) 
+			return;
+	}
+
     int empty_history_receive_buffer_index = -1;
     if (last_history_receive_buffer_index != -1) {
-        for (int i = 0; i < history_receive_data_buffer.size(); i ++) {
-            int index_iter = (last_history_receive_buffer_index+i) % history_receive_data_buffer.size();
+        for (int i = 0; i < history_receive_fields_mem.size(); i ++) {
+            int index_iter = (last_history_receive_buffer_index+i) % history_receive_fields_mem.size();
             if (!history_receive_buffer_status[index_iter]) {
                 empty_history_receive_buffer_index = index_iter;
                 break;
@@ -344,30 +359,36 @@ void Runtime_trans_algorithm::receve_data_in_temp_buffer()
         std::vector<bool> temp_history_receive_buffer_status;
         std::vector<long> temp_history_receive_sender_time;
         std::vector<long> temp_history_receive_usage_time;
-        std::vector<void*> temp_history_receive_data_buffer;
-        for (int i = 0; i < history_receive_data_buffer.size(); i ++) {
-            int index_iter = (last_history_receive_buffer_index+i) % history_receive_data_buffer.size();
+		std::vector<std::vector<Field_mem_info *> > temp_history_receive_fields_mem;
+        for (int i = 0; i < history_receive_fields_mem.size(); i ++) {
+            int index_iter = (last_history_receive_buffer_index+i) % history_receive_fields_mem.size();
             temp_history_receive_buffer_status.push_back(history_receive_buffer_status[index_iter]);
             temp_history_receive_sender_time.push_back(history_receive_sender_time[index_iter]);
             temp_history_receive_usage_time.push_back(history_receive_usage_time[index_iter]);
-            temp_history_receive_data_buffer.push_back(history_receive_data_buffer[index_iter]);
+			temp_history_receive_fields_mem.push_back(history_receive_fields_mem[index_iter]);
         }
         history_receive_buffer_status.clear();
         history_receive_sender_time.clear();
         history_receive_usage_time.clear();
-        history_receive_data_buffer.clear();
-        for (int i = 0; i < temp_history_receive_data_buffer.size(); i ++) {
+		history_receive_fields_mem.clear();
+        for (int i = 0; i < temp_history_receive_fields_mem.size(); i ++) {
             history_receive_buffer_status.push_back(temp_history_receive_buffer_status[i]);
             history_receive_sender_time.push_back(temp_history_receive_sender_time[i]);
             history_receive_usage_time.push_back(temp_history_receive_usage_time[i]);
-            history_receive_data_buffer.push_back(temp_history_receive_data_buffer[i]);            
+			history_receive_fields_mem.push_back(temp_history_receive_fields_mem[i]);
         }
         last_history_receive_buffer_index = 0;
         empty_history_receive_buffer_index = history_receive_buffer_status.size();
         history_receive_buffer_status.push_back(false);
         history_receive_sender_time.push_back(-1);
         history_receive_usage_time.push_back(-1);
-        history_receive_data_buffer.push_back(new long [(data_buf_size+sizeof(long)-1)/sizeof(long)]);
+		std::vector<Field_mem_info *> new_receive_fields_mem;
+		for (int i = 0; i < num_transfered_fields; i ++) {
+			new_receive_fields_mem.push_back(memory_manager->alloc_mem(fields_mem[i], BUF_MARK_DATA_TRANSFER, history_receive_fields_mem.size(), fields_mem[i]->get_data_type(), false));
+			for (int j = 0; j < history_receive_fields_mem.size(); j ++)
+				EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, history_receive_fields_mem[j][i] != new_receive_fields_mem[i], "Software error in Runtime_trans_algorithm::receive_data_in_temp_buffer");
+		}	
+		history_receive_fields_mem.push_back(new_receive_fields_mem);
     }
 
     history_receive_buffer_status[empty_history_receive_buffer_index] = true;
@@ -376,17 +397,32 @@ void Runtime_trans_algorithm::receve_data_in_temp_buffer()
     last_receive_field_sender_time = current_receive_field_sender_time;
 
     MPI_Win_lock(MPI_LOCK_SHARED, current_proc_id_union_comm, 0, data_win);
-    //memcpy(history_receive_data_buffer[empty_history_receive_buffer_index], data_buf, data_buf_size);
     int offset = 0;
     for (int i = 0; i < index_remote_procs_with_common_data.size(); i ++) {
         int remote_proc_index = index_remote_procs_with_common_data[i];
         if (transfer_size_with_remote_procs[remote_proc_index] == 0) 
 			continue;
         data_buf = (void *) (total_buf + recv_displs_in_current_proc[remote_proc_index] + 2*sizeof(long));
-        memcpy((char *)history_receive_data_buffer[empty_history_receive_buffer_index]+offset, data_buf, transfer_size_with_remote_procs[remote_proc_index]);
+        memcpy(temp_receive_data_buffer+offset, data_buf, transfer_size_with_remote_procs[remote_proc_index]);
         offset += transfer_size_with_remote_procs[remote_proc_index];
     }    
     MPI_Win_unlock(current_proc_id_union_comm, data_win);    
+	
+	offset = 0;
+	for (int i = 0; i < num_remote_procs; i ++) {
+		if (transfer_size_with_remote_procs[i] == 0) 
+			continue;
+		int old_offset = offset;
+		//int offset = recv_displs_in_current_proc[i];
+		for (int j = 0; j < num_transfered_fields; j ++) {
+			if (fields_routers[j]->get_num_dimensions() == 0) {
+				memcpy(history_receive_fields_mem[empty_history_receive_buffer_index][j]->get_data_buf(), temp_receive_data_buffer + offset, fields_data_type_sizes[j]);
+				offset += fields_data_type_sizes[j];
+			}
+			else unpack_MD_data(temp_receive_data_buffer, i, j, history_receive_fields_mem[empty_history_receive_buffer_index][j]->get_data_buf(), &offset);
+		}	
+		EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, offset - old_offset == transfer_size_with_remote_procs[i], "C-Coupler software error in recv of runtime_trans_algorithm.");
+	}
 
     EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Get receiving data from component \"%s\" (at time %ld) into temp buffer", remote_comp_full_name, last_receive_field_sender_time);
 
@@ -396,6 +432,8 @@ void Runtime_trans_algorithm::receve_data_in_temp_buffer()
 
 bool Runtime_trans_algorithm::run(bool bypass_timer)
 {
+	if (!bypass_timer)
+		timer_not_bypassed = true;
     if (send_or_receive)
         return send(bypass_timer);
     else return recv(bypass_timer);
@@ -404,6 +442,17 @@ bool Runtime_trans_algorithm::run(bool bypass_timer)
 
 bool Runtime_trans_algorithm::send(bool bypass_timer)
 {
+	if (!remote_comp_node_updated) {
+		remote_comp_node = comp_comm_group_mgt_mgr->load_comp_info_from_XML(local_comp_node->get_comp_id(), remote_comp_full_name, local_comp_node->get_comm_group());
+		Comp_comm_group_mgt_node *existing_remote_comp_node = comp_comm_group_mgt_mgr->search_global_node(remote_comp_full_name);
+		if (existing_remote_comp_node != NULL) {
+			delete remote_comp_node;
+			remote_comp_node = existing_remote_comp_node;
+		}
+		remote_comp_node_updated = true;
+		remote_comp_node->allocate_proc_latest_model_time();
+	}
+
     if (index_remote_procs_with_common_data.size() > 0) {
         preprocess();
         if (!is_remote_data_buf_ready(bypass_timer)) {
@@ -480,34 +529,15 @@ bool Runtime_trans_algorithm::recv(bool bypass_timer)
     else EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "Use timer to begin to receive data from component \"%s\": %ld", remote_comp_full_name, current_remote_fields_time);
 
     if (index_remote_procs_with_common_data.size() > 0) {
-
         preprocess();
-
         while (!received_data_ready) {
-            receve_data_in_temp_buffer();
+            receive_data_in_temp_buffer();
             received_data_ready = last_history_receive_buffer_index != -1 && history_receive_buffer_status[last_history_receive_buffer_index];
             if (!received_data_ready)
                 inout_interface_mgr->runtime_receive_algorithms_receive_data();
         }
-
-        int offset = 0;
-        for (int i = 0; i < num_remote_procs; i ++) {
-            if (transfer_size_with_remote_procs[i] == 0) 
-                continue;
-            int old_offset = offset;
-            //int offset = recv_displs_in_current_proc[i];
-            for (int j = 0; j < num_transfered_fields; j ++) {
-                if (fields_routers[j]->get_num_dimensions() == 0) {
-                    memcpy(fields_data_buffers[j], (char *) history_receive_data_buffer[last_history_receive_buffer_index] + offset, fields_data_type_sizes[j]);
-                    offset += fields_data_type_sizes[j];
-                }
-                else unpack_MD_data(history_receive_data_buffer[last_history_receive_buffer_index], i, j, &offset);
-                fields_mem[j]->define_field_values(false);
-            }
-
-            EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, offset - old_offset == transfer_size_with_remote_procs[i], "C-Coupler software error in recv of runtime_trans_algorithm.");
-            //EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR, -1, offset - recv_displs_in_current_proc[i] == transfer_size_with_remote_procs[i], "C-Coupler software error in recv of runtime_trans_algorithm.");
-        }
+		for (int j = 0; j < num_transfered_fields; j ++)
+			memcpy(fields_mem[j]->get_data_buf(), history_receive_fields_mem[last_history_receive_buffer_index][j]->get_data_buf(), fields_mem[j]->get_size_of_field()*get_data_type_size(fields_mem[j]->get_data_type()));
     }
 
 	if (index_remote_procs_with_common_data.size() > 0)
@@ -592,7 +622,7 @@ void Runtime_trans_algorithm::pack_MD_data(int remote_proc_index, int field_inde
 }
 
 
-void Runtime_trans_algorithm::unpack_MD_data(void *data_buf, int remote_proc_index, int field_index, int * offset)
+void Runtime_trans_algorithm::unpack_MD_data(void *data_buf, int remote_proc_index, int field_index, void *field_data_buffer, int * offset)
 {
     int num_segments;
     int *segment_starts, *num_elements_in_segments;
@@ -610,16 +640,16 @@ void Runtime_trans_algorithm::unpack_MD_data(void *data_buf, int remote_proc_ind
     for (i = 0; i < num_segments; i ++) {
         switch (fields_data_type_sizes[field_index]) {
             case 1:
-                unpack_segment_data((char*)((char*)data_buf+(*offset)), (char*)fields_data_buffers[field_index], segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
+                unpack_segment_data((char*)((char*)data_buf+(*offset)), (char*)field_data_buffer, segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
                 break;
             case 2:
-                unpack_segment_data((short*)((char*)data_buf+(*offset)), (short*)fields_data_buffers[field_index], segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
+                unpack_segment_data((short*)((char*)data_buf+(*offset)), (short*)field_data_buffer, segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
                 break;
             case 4:
-                unpack_segment_data((int*)((char*)data_buf+(*offset)), (int*)fields_data_buffers[field_index], segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
+                unpack_segment_data((int*)((char*)data_buf+(*offset)), (int*)field_data_buffer, segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
                 break;
             case 8:
-                unpack_segment_data((double*)((char*)data_buf+(*offset)), (double*)fields_data_buffers[field_index], segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
+                unpack_segment_data((double*)((char*)data_buf+(*offset)), (double*)field_data_buffer, segment_starts[i], num_elements_in_segments[i], field_2D_size, field_grids_num_lev[field_index], is_V1D_sub_grid_after_H2D_sub_grid[field_index]);
                 break;
             default:
                 EXECUTION_REPORT_ERROR_OPTIONALLY(REPORT_ERROR,-1, false, "Software error in Runtime_trans_algorithm::unpack_MD_data: unsupported data type in runtime transfer algorithm. Please verify.");

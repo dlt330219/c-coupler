@@ -27,6 +27,8 @@
 #define INTERFACE_TYPE_IO_OUTPUT            ((int)1)
 #define INTERFACE_TYPE_IO_WRITE             ((int)2)
 
+#define FIELD_NECESSITY_NECESSARY           ((int)1)
+#define FIELD_NECESSITY_OPTIONAL            ((int)0)
 
 class Inout_interface;
 class Coupling_connection;
@@ -50,7 +52,7 @@ class Connection_field_time_info
 		Coupling_timer *timer;
 		Inout_interface *inout_interface;
 
-		Connection_field_time_info(Inout_interface*, Coupling_timer*, int, int);
+		Connection_field_time_info(Inout_interface*, Coupling_timer*, int, int, int, int, int, int);
 		void get_time_of_next_timer_on(bool);
 		void reset_last_timer_info() { last_timer_num_elapsed_days = -1; last_timer_second = -1; }
 		void write_into_array_for_restart(char**, long&, long&);		
@@ -84,6 +86,7 @@ class Connection_coupling_procedure
 		Runtime_trans_algorithm *runtime_data_transfer_algorithm;
 		bool finish_status;
 		bool transfer_data;
+		bool coupling_connections_dumped;
 		
 	public:
 		Connection_coupling_procedure(Inout_interface*, Coupling_connection*);
@@ -98,6 +101,9 @@ class Connection_coupling_procedure
 		bool get_finish_status() { return finish_status; }
 		void write_into_array_for_restart(char**, long&, long&);
 		void import_restart_data(const char *, long &, const char *);
+		Coupling_connection* get_coupling_connection(){return coupling_connection;}
+		bool get_coupling_connections_dumped(){return coupling_connections_dumped;}
+		void set_coupling_connections_dumped(){ coupling_connections_dumped = true;}
 };
 
 
@@ -116,6 +122,7 @@ class Inout_interface
 		std::vector<Field_mem_info *> fields_mem_registered;
 		std::vector<const char*> fields_name;
 		std::vector<bool> fields_connected_status;
+		std::vector<int> imported_fields_necessity;
 		std::vector<Connection_coupling_procedure*> coupling_procedures;
 		std::vector<Inout_interface *> children_interfaces;           // only for remap interface 
 		int execution_checking_status;
@@ -148,13 +155,20 @@ class Inout_interface
 		Coupling_timer *get_timer() { return timer; }
 		void add_coupling_procedure(Connection_coupling_procedure*);
 		int get_inst_or_aver() { return inst_or_aver; } 
-		void execute(bool, int*, int, const char*);
+		void execute(bool, int, int*, int, const char*);
 		Inout_interface *get_child_interface(int i);
 		int get_num_coupling_procedures() { return coupling_procedures.size(); }
 		void add_remappling_fraction_processing(void *, void *, int, int, const char *, const char *, const char *);		
 		void preprocessing_for_frac_based_remapping();
 		void postprocessing_for_frac_based_remapping(bool);
 		long get_bypass_counter() { return bypass_counter; } 
+		void write_export_info_into_XML_file(TiXmlElement*);
+		bool has_been_executed_with_timer() { return (execution_checking_status & 0x2) != 0; }		
+		int get_h2d_grid_area_in_remapping_weights(const char *, int, void *, int, const char *, const char *);
+		void set_fields_necessity(int*, int, const char *);
+		int check_is_import_field_connected(int, const char *);
+		void dump_active_coupling_connections();
+		void dump_active_coupling_connections_into_XML(TiXmlElement *);
 };
 
 
@@ -180,11 +194,11 @@ class Inout_interface_mgt
 		Inout_interface *get_interface(int, const char*);
 		void get_all_import_interfaces_of_a_component(std::vector<Inout_interface*>&, int);	
 		void get_all_import_interfaces_of_a_component(std::vector<Inout_interface*>&, const char*);		
-		void get_all_unconnected_inout_interface_fields_info(std::vector<char*> & , char **, long &, MPI_Comm);
+		void get_all_unconnected_inout_interface_fields_info(std::vector<const char*> & , char **, long &, MPI_Comm);
 		void merge_unconnected_inout_interface_fields_info(int);
 		void write_all_interfaces_fields_info();
-		void execute_interface(int, bool, int*, int, int*, const char*);
-		void execute_interface(int, const char*, bool, int *, int, int*, const char*);
+		void execute_interface(int, int, bool, int*, int, int*, const char*);
+		void execute_interface(int, int, const char*, bool, int *, int, int*, const char*);
 		void add_runtime_receive_algorithm(Runtime_trans_algorithm *new_algorithm) { all_runtime_receive_algorithms.push_back(new_algorithm); }
 		void erase_runtime_receive_algorithm(Runtime_trans_algorithm *);
 		void runtime_receive_algorithms_receive_data();
@@ -192,6 +206,10 @@ class Inout_interface_mgt
 		void free_all_MPI_wins(); 
 		void write_into_restart_buffers(std::vector<Restart_buffer_container*> *, int);
 		void import_restart_data(Restart_mgt *, const char *, int, const char *);
+		void write_comp_export_info_into_XML_file(int);
+		void get_all_export_interfaces_of_a_field(int, const char *, std::vector<const char*> &, std::vector<const char*> &);
+		Inout_interface *search_an_inout_interface_executed_with_timer(int);		
+		int get_h2d_grid_area_in_remapping_weights(int, int, void *, int, const char *, const char *);
 };
 
 #endif

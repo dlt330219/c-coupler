@@ -394,6 +394,7 @@ Time_mgt::Time_mgt(int comp_id, const char *XML_file_name)
 	this->comp_id = comp_id;
 	this->restart_timer = NULL;
 	this->advance_time_synchronized = false;
+	this->time_has_been_advanced = false;
 
 	{
 		int start_date, stop_date, reference_date, rest_freq_count, time_step;
@@ -415,6 +416,13 @@ Time_mgt::Time_mgt(int comp_id, const char *XML_file_name)
 		EXECUTION_REPORT(REPORT_ERROR, -1, words_are_the_same(run_type,RUNTYPE_INITIAL) || words_are_the_same(run_type,RUNTYPE_CONTINUE) || words_are_the_same(run_type,RUNTYPE_BRANCH) || words_are_the_same(run_type,RUNTYPE_HYBRID),
 			             "Run_type (%s) is wrong. It must be one of the four options: \"initial\", \"continue\", \"branch\" and \"hybrid\". Please check the XML file \"%s\" arround the line_number %d", run_type, XML_file_name, line_number);
 		strcpy(this->run_type, run_type);
+		if (words_are_the_same(run_type,RUNTYPE_INITIAL))
+			runtype_mark = RUNTYPE_MARK_INITIAL;
+		else if (words_are_the_same(run_type,RUNTYPE_CONTINUE))
+			runtype_mark = RUNTYPE_MARK_CONTINUE;
+		else if (words_are_the_same(run_type,RUNTYPE_BRANCH))
+			runtype_mark = RUNTYPE_MARK_BRANCH;
+		else runtype_mark = RUNTYPE_MARK_HYBRID;
 		if (words_are_the_same(run_type,RUNTYPE_BRANCH) || words_are_the_same(run_type,RUNTYPE_HYBRID)) {
 			const char *rest_refcase = get_XML_attribute(-1, 80, XML_element, "rest_ref_case", XML_file_name, line_number, "the name of the reference case for branch run of hybrid run", "the overall parameters to run the model");
 			strcpy(this->rest_refcase, rest_refcase);
@@ -441,6 +449,9 @@ Time_mgt::Time_mgt(int comp_id, const char *XML_file_name)
 		const char *start_date_string = get_XML_attribute(-1, -1, XML_element, "start_date", XML_file_name, line_number, "the start date to run the simulation", "the overall parameters to run the model");		
 		EXECUTION_REPORT(REPORT_ERROR, -1, is_string_decimal_number(start_date_string), "Error happens when using the XML configuration file \"%s\": the value (\"%s\") of the attribute \"%s\" is not a decimal integer. Please verify the XML file around the line %d", XML_file_name, start_date_string, "start_date", line_number);
 		sscanf(start_date_string, "%d", &start_date);
+		restart_second = -1;
+		restart_num_elapsed_day = -1;
+		restart_full_time = -1;
 	    start_year = start_date / 10000;
     	start_month = (start_date%10000) / 100;
     	start_day = start_date % 100;
@@ -513,6 +524,13 @@ Time_mgt::Time_mgt(int comp_id, const char *XML_file_name)
 		}
 	}
 
+	num_total_steps = -1;
+	initialize_to_start_time();
+}
+
+
+void Time_mgt::initialize_to_start_time()
+{
     previous_year = start_year;
     previous_month = start_month;
     previous_day = start_day;
@@ -528,7 +546,9 @@ Time_mgt::Time_mgt(int comp_id, const char *XML_file_name)
 	else stop_num_elapsed_day = -1;
 	current_step_id = 0;
 	restarted_step_id = -1;
-	num_total_steps = -1;
+	restart_second = -1;
+	restart_num_elapsed_day = -1;
+	restart_full_time = -1;
 }
 
 
@@ -541,22 +561,6 @@ void Time_mgt::build_restart_timer()
 
 Time_mgt::~Time_mgt()
 {
-}
-
-
-void Time_mgt::reset_timer()
-{
-	EXECUTION_REPORT(REPORT_ERROR,-1, false, "software error: Time_mgt::reset_timer is not enabled");
-
-	current_year = start_year;
-	current_month = start_month;
-	current_day = start_day;
-	current_second = start_second;
-	current_step_id = 0;
-	
-	current_num_elapsed_day = calculate_elapsed_day(start_year,start_month,start_day);
-	start_num_elapsed_day = current_num_elapsed_day;
-	stop_num_elapsed_day = calculate_elapsed_day(stop_year,stop_month,stop_day);
 }
 
 
@@ -595,6 +599,8 @@ void Time_mgt::advance_time(int &current_year, int &current_month, int &current_
     int i, num_days_in_current_month;
 
 
+	if (&current_year == &(this->current_year))
+		time_has_been_advanced = true;
     current_second += time_step_in_second;
 	for (i = 0; i < current_second / SECONDS_PER_DAY; i ++) {
         current_num_elapsed_day ++;
@@ -681,7 +687,7 @@ bool Time_mgt::check_is_model_run_finished()
     EXECUTION_REPORT_LOG(REPORT_LOG, comp_id, true, "check_is_model_run_finished %d %ld", current_step_id, num_total_steps);
 	if (num_total_steps == -1)
 		return false;
-    return current_step_id > num_total_steps;
+    return current_step_id >= num_total_steps;
 }
 
 
@@ -725,7 +731,6 @@ void Time_mgt::check_timer_format(const char *frequency_unit, int frequency_coun
 	    if (IS_TIME_UNIT_SECOND(frequency_unit) && check_value) {
 	        EXECUTION_REPORT(REPORT_ERROR, comp_id, frequency_count%time_step_in_second == 0, "Error happens when defining a timer: the frequency count (%d) in timer is not a multiple of the time step (%d) of the component when the frequency unit is \"%s\". Please check the model code with the annotation \"%s\"", frequency_count, time_step_in_second, frequency_unit, annotation);
 	        EXECUTION_REPORT(REPORT_ERROR, comp_id, local_lag_count%time_step_in_second == 0, "Error happens when defining a timer: the remote lag count (%d) in a timer is not a multiple of the time step (%d) of the component when the frequency unit is \"%s\". Please check the model code with the annotation \"%s\"", local_lag_count, time_step_in_second, frequency_unit, annotation);        
-	        EXECUTION_REPORT(REPORT_ERROR, comp_id, remote_lag_count%time_step_in_second == 0, "Error happens when defining a timer: the remote lag count (%d) in a timer is not a multiple of the time step (%d) of the component when the frequency unit is \"%s\". Please check the model code with the annotation \"%s\"", remote_lag_count, time_step_in_second, frequency_unit, annotation);
 	    }	
 		if (local_lag_count != 0)
 			EXECUTION_REPORT(REPORT_ERROR, comp_id, !IS_TIME_UNIT_MONTH(frequency_unit) && !IS_TIME_UNIT_YEAR(frequency_unit), "Error happens when defining a timer: the local lag count cannot be set when the frequency unit is \"%s\". Please check the model code with the annotation \"%s\"", frequency_unit, annotation);
@@ -807,6 +812,10 @@ Time_mgt *Time_mgt::clone_time_mgr(int comp_id)
 	Time_mgt *new_time_mgr = new Time_mgt();
 
 
+	new_time_mgr->restart_second = this->restart_second;
+	new_time_mgr->restart_num_elapsed_day = this->restart_num_elapsed_day;
+	new_time_mgr->restart_full_time = this->restart_full_time;
+	new_time_mgr->restarted_step_id = this->restarted_step_id;
 	new_time_mgr->start_year = this->start_year;
 	new_time_mgr->start_month = this->start_month;
 	new_time_mgr->start_day = this->start_day;
@@ -836,6 +845,7 @@ Time_mgt *Time_mgt::clone_time_mgr(int comp_id)
 	new_time_mgr->stop_num_elapsed_day = this->stop_num_elapsed_day;
 	new_time_mgr->advance_time_synchronized = false;
 	new_time_mgr->stop_n = this->stop_n;
+	new_time_mgr->runtype_mark = this->runtype_mark;
 	strcpy(new_time_mgr->case_name, this->case_name);
 	strcpy(new_time_mgr->exp_model_name, this->exp_model_name);
 	strcpy(new_time_mgr->case_desc, this->case_desc);
@@ -847,6 +857,7 @@ Time_mgt *Time_mgt::clone_time_mgr(int comp_id)
 	new_time_mgr->rest_refdate = this->rest_refdate;
 	new_time_mgr->rest_refsecond = this->rest_refsecond;
 	new_time_mgr->restart_timer = NULL;
+	new_time_mgr->time_has_been_advanced = false;
 
 	return new_time_mgr;
 }
@@ -894,7 +905,9 @@ void Time_mgt::check_consistency_of_current_time(int date, int second, const cha
 
 bool Time_mgt::is_time_out_of_execution(long another_time)
 {
-	return another_time < ((long)start_num_elapsed_day)*100000+start_second || another_time > ((long)stop_num_elapsed_day)*100000+stop_second;
+	if (restart_second == -1)
+		return another_time < ((long)start_num_elapsed_day)*100000+start_second || another_time >= ((long)stop_num_elapsed_day)*100000+stop_second;
+	else return another_time < ((long)restart_num_elapsed_day)*100000+restart_second || another_time >= ((long)stop_num_elapsed_day)*100000+stop_second;
 }
 
 
@@ -979,7 +992,12 @@ void Time_mgt::import_restart_data(const char *temp_array_buffer, long &buffer_c
 	}
     current_num_elapsed_day = calculate_elapsed_day(current_year,current_month,current_day);
 	current_step_id = ((current_num_elapsed_day-start_num_elapsed_day)*SECONDS_PER_DAY+current_second-start_second)/time_step_in_second;
-	restarted_step_id = current_step_id;
+	if (words_are_the_same(RUNTYPE_CONTINUE, run_type) || words_are_the_same(RUNTYPE_BRANCH, run_type)) {
+		restart_second = current_second;
+		restart_num_elapsed_day = current_num_elapsed_day;
+		restart_full_time = get_current_full_time(); 
+		restarted_step_id = current_step_id;
+	}
 
 	if ((words_are_the_same(RUNTYPE_CONTINUE, run_type) || words_are_the_same(RUNTYPE_BRANCH, run_type)) && !words_are_the_same(stop_option, "date")) {
 		calculate_stop_time(current_year, current_month, current_day, current_second);
@@ -988,6 +1006,15 @@ void Time_mgt::import_restart_data(const char *temp_array_buffer, long &buffer_c
 		EXECUTION_REPORT(REPORT_ERROR, comp_id, set_time_step_in_second(time_step_in_second, "in Time_mgt::import_restart_data", false), "Error happens when importing the restart data from the file \"%s\": the time step does not match the setting of stop time", file_name);
 		current_num_elapsed_day = calculate_elapsed_day(current_year,current_month,current_day);
 	}
+}
+
+
+void Time_mgt::reset_current_time_to_start_time(const char *annotation)
+{
+	Inout_interface *executed_interface = inout_interface_mgr->search_an_inout_interface_executed_with_timer(comp_id);
+	if (executed_interface != NULL)
+		EXECUTION_REPORT(REPORT_ERROR, comp_id, false, "Error happens when calling the API CCPL_reset_current_time_to_start_time: the current time cannot be reset because a coupling interface \"%s\" of the current component model has been executed without its timer bypassed. Please check the model code with the annotation \"%s\"", executed_interface->get_interface_name(), annotation);
+	initialize_to_start_time();
 }
 
 

@@ -22,6 +22,7 @@
    public :: CCPL_register_H2D_grid_via_global_data 
    public :: CCPL_register_H2D_grid_via_local_data
    public :: CCPL_get_H2D_grid_data
+   public :: CCPL_get_H2D_grid_area_in_remapping_wgts
    public :: CCPL_register_frac_based_remap_interface
    public :: CCPL_register_IO_field_from_field_instance 
    public :: CCPL_register_IO_fields_from_field_instances 
@@ -44,8 +45,11 @@
    public :: CCPL_is_end_current_month
    public :: CCPL_allreduce_real16
    public :: CCPL_register_component
+   public :: CCPL_get_comp_log_file_name
+   public :: CCPL_get_comp_log_file_device
    public :: CCPL_get_component_id
    public :: CCPL_get_current_process_id_in_component
+   public :: CCPL_is_comp_type_coupled
    public :: CCPL_get_component_process_global_id
    public :: CCPL_is_current_process_in_component
    public :: CCPL_get_num_process_in_component
@@ -53,8 +57,8 @@
    public :: CCPL_register_CoR_defined_grid
    public :: CCPL_register_H2D_grid_via_file
    public :: CCPL_register_H2D_grid_from_another_component
-   public :: CCPL_set_3D_grid_dynamic_surface_field
-   public :: CCPL_set_3D_grid_static_surface_field
+   public :: CCPL_set_3D_grid_variable_surface_field
+   public :: CCPL_set_3D_grid_constant_surface_field
    public :: CCPL_set_3D_grid_external_surface_field
    public :: CCPL_register_MD_grid_via_multi_grids
    public :: CCPL_register_mid_point_grid
@@ -64,16 +68,19 @@
    public :: CCPL_define_single_timer
    public :: CCPL_define_complex_timer 
    public :: CCPL_set_time_step
+   public :: CCPL_reset_current_time_to_start_time
    public :: CCPL_advance_time
    public :: CCPL_is_timer_on
    public :: CCPL_check_current_time
    public :: CCPL_finalize
+   public :: CCPL_is_last_step_of_model_run
    public :: CCPL_is_model_run_ended
    public :: CCPL_register_normal_remap_interface
    public :: CCPL_register_import_interface 
    public :: CCPL_register_export_interface 
    public :: CCPL_execute_interface_using_id 
    public :: CCPL_execute_interface_using_name
+   public :: CCPL_check_is_import_field_connected
    public :: CCPL_get_local_comp_full_name 
    public :: CCPL_report_log 
    public :: CCPL_report_progress 
@@ -177,6 +184,15 @@
        CCPL_get_H2D_grid_float_data, &
        CCPL_get_H2D_grid_double_data
    end interface
+
+
+
+   interface CCPL_get_H2D_grid_area_in_remapping_wgts; module procedure &
+        CCPL_get_H2D_grid_float_area_in_remapping_wgts, &
+        CCPL_get_H2D_grid_double_area_in_remapping_wgts
+   end interface
+
+
 
 
 
@@ -1383,23 +1399,28 @@
 
 
 
-   integer FUNCTION CCPL_register_component(parent_id, comp_name, comp_type, comp_comm, change_dir, annotation)
+   integer FUNCTION CCPL_register_component(parent_id, comp_name, comp_type, comp_comm, considered_in_parent_coupling_gen, change_dir, annotation)
    implicit none
    integer                                 :: rcode
-   integer, external                       :: chdir, getcwd   ! LINUX system call
+   integer, external                       :: getcwd   ! LINUX system call
    integer, intent(in)                     :: parent_id
    integer                                 :: comp_id
    integer                                 :: ierr
    integer, intent(inout)                  :: comp_comm
    character(len=*), intent(in)            :: comp_type
    character(len=*), intent(in)            :: comp_name
+   logical, intent(in), optional           :: considered_in_parent_coupling_gen
    logical, intent(in), optional           :: change_dir
    character(len=*), intent(in), optional  :: annotation
    integer                                 :: local_change_dir
+   integer                                 :: local_considered_in_parent_coupling_gen
    character *1024                         :: local_annotation
    character *1024                         :: exe_name
    character *1024                         :: root_working_dir
 
+
+   local_considered_in_parent_coupling_gen = 1
+   if (present(considered_in_parent_coupling_gen) .and. (.not. considered_in_parent_coupling_gen)) local_considered_in_parent_coupling_gen = 0
 
    local_change_dir = 0
    if (present(change_dir) .and. change_dir) local_change_dir = 1
@@ -1414,9 +1435,9 @@
       call getarg(0, exe_name)
       call initialize_CCPL_mgrs
       call check_CCPL_Fortran_API_int_type(parent_id)
-      call register_root_component(comp_comm, trim(comp_name)//char(0), trim(comp_type)//char(0), trim(local_annotation)//char(0), comp_id, local_change_dir, trim(exe_name)//char(0))
+      call register_root_component(comp_comm, trim(comp_name)//char(0), trim(comp_type)//char(0), trim(local_annotation)//char(0), comp_id, local_considered_in_parent_coupling_gen, local_change_dir, trim(exe_name)//char(0))
    else
-      call register_component(parent_id, trim(comp_name)//char(0), trim(comp_type)//char(0), comp_comm, trim(local_annotation)//char(0), local_change_dir, comp_id)
+      call register_component(parent_id, trim(comp_name)//char(0), trim(comp_type)//char(0), comp_comm, trim(local_annotation)//char(0), local_considered_in_parent_coupling_gen, local_change_dir, comp_id)
    endif
    CCPL_register_component = comp_id
 
@@ -1440,6 +1461,45 @@
    CCPL_get_component_id = comp_id
 
    end FUNCTION CCPL_get_component_id
+
+
+
+   logical FUNCTION CCPL_get_comp_log_file_name(comp_id, file_name, annotation)
+   integer, intent(in)                     :: comp_id
+   character(len=*), intent(out)           :: file_name
+   character(len=*), intent(in), optional  :: annotation
+   integer                                 :: log_file_opened 
+   character *1024                         :: local_annotation
+
+   local_annotation = ""
+   if (present(annotation)) local_annotation = annotation
+
+   call get_ccpl_comp_log_file_name(comp_id, file_name, len(file_name), log_file_opened, trim(local_annotation)//char(0))
+   CCPL_get_comp_log_file_name = .false.
+   if (log_file_opened .eq. 1) CCPL_get_comp_log_file_name = .true.
+
+   END FUNCTION CCPL_get_comp_log_file_name
+   
+
+
+   integer FUNCTION CCPL_get_comp_log_file_device(comp_id, annotation)
+   integer, intent(in)                     :: comp_id
+   character(len=*), intent(in), optional  :: annotation
+   integer                                 :: log_file_device, log_file_opened 
+   character *1024                         :: local_annotation
+   character *4096                         :: file_name
+
+   local_annotation = ""
+   if (present(annotation)) local_annotation = annotation
+   call get_ccpl_comp_log_file_device(comp_id, log_file_device, log_file_opened, trim(local_annotation)//char(0))
+   if (log_file_opened .eq. 0) then
+       call get_ccpl_comp_log_file_name(comp_id, file_name, len(file_name), log_file_opened, trim("C-Coupler CCPL_get_comp_log_file_device internal")//char(0))
+       write(*,*) 'open the file to device ', log_file_device, file_name
+       open(unit=log_file_device,file=file_name,position='APPEND')
+   endif 
+   CCPL_get_comp_log_file_device = log_file_device
+
+   END FUNCTION CCPL_get_comp_log_file_device
 
 
 
@@ -1474,6 +1534,25 @@
    CCPL_get_current_process_id_in_component = proc_id
 
    END FUNCTION CCPL_get_current_process_id_in_component
+
+
+
+   LOGICAL FUNCTION CCPL_is_comp_type_coupled(comp_id, comp_type, annotation)
+   integer, intent(in)                     :: comp_id
+   character(len=*), intent(in)            :: comp_type
+   character(len=*), intent(in), optional  :: annotation
+   integer                                 :: is_coupled
+   character *1024                         :: local_annotation
+
+   local_annotation = ""
+   if (present(annotation)) local_annotation = annotation
+
+   call check_is_comp_type_coupled(comp_id, trim(comp_type)//char(0), is_coupled, trim(local_annotation)//char(0))
+
+   CCPL_is_comp_type_coupled = .false.
+   if (is_coupled .eq. 1) CCPL_is_comp_type_coupled = .true.
+
+   END FUNCTION CCPL_is_comp_type_coupled
 
 
 
@@ -1514,23 +1593,18 @@
 
 
 
-   SUBROUTINE CCPL_end_coupling_configuration(comp_id, do_coupling_generation, annotation)
+   SUBROUTINE CCPL_end_coupling_configuration(comp_id, annotation)
    implicit none
    integer                                 :: comp_id
-   logical, intent(in), optional           :: do_coupling_generation
    character(len=*), optional              :: annotation
    character *1024                         :: local_annotation
-   integer                                 :: local_do_coupling_generation
    
    local_annotation = ""
    if (present(annotation)) then
        local_annotation = annotation
    endif
 
-   local_do_coupling_generation = 0
-   if (present(do_coupling_generation) .and. do_coupling_generation) local_do_coupling_generation = 1
-
-   call ccpl_end_registration(comp_id, local_do_coupling_generation, trim(local_annotation)//char(0))
+   call ccpl_end_registration(comp_id, trim(local_annotation)//char(0))
 
    END SUBROUTINE CCPL_end_coupling_configuration
 
@@ -2173,7 +2247,7 @@
 
 
 
-   SUBROUTINE CCPL_set_3D_grid_dynamic_surface_field(grid_id, field_id, annotation)
+   SUBROUTINE CCPL_set_3D_grid_variable_surface_field(grid_id, field_id, annotation)
    implicit none
    integer, intent(in)                                     :: grid_id
    integer, intent(in)                                     :: field_id
@@ -2186,11 +2260,11 @@
        call set_3D_grid_surface_field(grid_id, field_id, 1, trim("")//char(0))
    endif
 
-   END SUBROUTINE CCPL_set_3D_grid_dynamic_surface_field
+   END SUBROUTINE CCPL_set_3D_grid_variable_surface_field
    
 
 
-   SUBROUTINE CCPL_set_3D_grid_static_surface_field(grid_id, field_id, annotation)
+   SUBROUTINE CCPL_set_3D_grid_constant_surface_field(grid_id, field_id, annotation)
    implicit none
    integer, intent(in)                                     :: grid_id
    integer, intent(in)                                     :: field_id
@@ -2203,7 +2277,7 @@
        call set_3D_grid_surface_field(grid_id, field_id, 0, trim("")//char(0))
    endif
 
-   END SUBROUTINE CCPL_set_3D_grid_static_surface_field
+   END SUBROUTINE CCPL_set_3D_grid_constant_surface_field
 
 
 
@@ -2285,6 +2359,48 @@
    CCPL_get_grid_id = grid_id
     
    END FUNCTION CCPL_get_grid_id
+
+
+
+   logical FUNCTION CCPL_get_H2D_grid_float_area_in_remapping_wgts(interface_id, field_index, area_array, annotation)
+   implicit none
+   integer, intent(in)                     :: interface_id
+   integer, intent(in)                     :: field_index
+   real(R4), intent(out), dimension(:)     :: area_array
+   character(len=*), intent(in), optional  :: annotation
+   integer                                 :: have_area
+
+   if (present(annotation)) then
+      call get_h2d_grid_area_in_remapping_weights(interface_id, field_index, area_array, size(area_array), trim("real4")//char(0), have_area, trim(annotation)//char(0))
+   else
+      call get_h2d_grid_area_in_remapping_weights(interface_id, field_index, area_array, size(area_array), trim("real4")//char(0), have_area, trim("")//char(0))
+   endif
+
+   CCPL_get_H2D_grid_float_area_in_remapping_wgts = .false.
+   if (have_area .eq. 1) CCPL_get_H2D_grid_float_area_in_remapping_wgts = .true.
+
+   END FUNCTION CCPL_get_H2D_grid_float_area_in_remapping_wgts
+
+
+
+   logical FUNCTION CCPL_get_H2D_grid_double_area_in_remapping_wgts(interface_id, field_index, area_array, annotation)
+   implicit none
+   integer, intent(in)                     :: interface_id
+   integer, intent(in)                     :: field_index
+   real(R8), intent(out), dimension(:)     :: area_array
+   character(len=*), intent(in), optional  :: annotation
+   integer                                 :: have_area
+
+   if (present(annotation)) then
+      call get_h2d_grid_area_in_remapping_weights(interface_id, field_index, area_array, size(area_array), trim("real8")//char(0), have_area, trim(annotation)//char(0))
+   else
+      call get_h2d_grid_area_in_remapping_weights(interface_id, field_index, area_array, size(area_array), trim("real8")//char(0), have_area, trim("")//char(0))
+   endif
+
+   CCPL_get_H2D_grid_double_area_in_remapping_wgts = .false.
+   if (have_area .eq. 1) CCPL_get_H2D_grid_double_area_in_remapping_wgts = .true.
+
+   END FUNCTION CCPL_get_H2D_grid_double_area_in_remapping_wgts
 
 
 
@@ -2426,6 +2542,21 @@
 
 
 
+   SUBROUTINE CCPL_reset_current_time_to_start_time(comp_id, annotation)
+   implicit none
+   integer,          intent(in)                :: comp_id
+   character(len=*), intent(in), optional      :: annotation
+
+   if (present(annotation)) then
+       call reset_component_current_time_to_start_time(comp_id, trim(annotation)//char(0))
+   else
+       call reset_component_current_time_to_start_time(comp_id, trim("")//char(0))
+   endif
+
+   END SUBROUTINE CCPL_reset_current_time_to_start_time
+
+
+
    SUBROUTINE CCPL_advance_time(comp_id, annotation)
    implicit none
    integer,          intent(in)                :: comp_id
@@ -2500,6 +2631,23 @@
 
    END SUBROUTINE  CCPL_finalize
 
+
+   
+   logical FUNCTION CCPL_is_last_step_of_model_run(comp_id, annotation)
+   implicit none
+   integer,          intent(in)                :: comp_id
+   character(len=*), intent(in), optional      :: annotation
+   integer                                     :: is_last_step
+
+   if (present(annotation)) then
+       call check_is_ccpl_model_last_step(comp_id, is_last_step, trim(annotation)//char(0))
+   else
+       call check_is_ccpl_model_last_step(comp_id, is_last_step, trim("")//char(0))
+   endif
+   CCPL_is_last_step_of_model_run=.false.
+   if (is_last_step .eq. 1) CCPL_is_last_step_of_model_run = .false.
+
+   END FUNCTION CCPL_is_last_step_of_model_run
 
 
    logical FUNCTION CCPL_is_model_run_ended(comp_id, annotation)
@@ -2622,21 +2770,43 @@
 
 
 
-   integer FUNCTION CCPL_register_import_interface(interface_name, num_field_instances, field_instance_IDs, timer_ID, inst_or_aver, annotation)
+   logical FUNCTION CCPL_check_is_import_field_connected(interface_id, field_instance_id, annotation)
    implicit none
-   character(len=*), intent(in)                :: interface_name
-   character(len=*), intent(in), optional      :: annotation
-   integer,          intent(in)                :: timer_ID
-   integer,          intent(in)                :: inst_or_aver
-   integer,          intent(in), dimension(:)  :: field_instance_IDs
-   integer,          intent(in)                :: num_field_instances
-   integer                                     :: interface_id
+   integer,          intent(in)                         :: interface_id
+   integer,          intent(in)                         :: field_instance_id
+   character(len=*), intent(in), optional               :: annotation
+   character *2048                                      :: local_annotation
+   integer                                              :: check_result
 
+   local_annotation = ""
+   if (present(annotation)) local_annotation = annotation
+   call check_is_ccpl_import_field_connected(interface_id, field_instance_id, check_result, trim(local_annotation)//char(0))
+   CCPL_check_is_import_field_connected = .true.
+   if (check_result .eq. 0) CCPL_check_is_import_field_connected = .false.
    
-   if (present(annotation)) then
-       call register_inout_interface(trim(interface_name)//char(0), interface_id, 0, num_field_instances, field_instance_IDs, timer_ID, inst_or_aver, trim(annotation)//char(0), size(field_instance_IDs))
-   else
-       call register_inout_interface(trim(interface_name)//char(0), interface_id, 0, num_field_instances, field_instance_IDs, timer_ID, inst_or_aver, trim("")//char(0), size(field_instance_IDs))
+   END FUNCTION CCPL_check_is_import_field_connected
+   
+
+
+   integer FUNCTION CCPL_register_import_interface(interface_name, num_field_instances, field_instance_IDs, timer_ID, inst_or_aver, necessity, annotation)
+   implicit none
+   character(len=*), intent(in)                         :: interface_name
+   character(len=*), intent(in), optional               :: annotation
+   integer,          intent(in)                         :: timer_ID
+   integer,          intent(in)                         :: inst_or_aver
+   integer,          intent(in), dimension(:)           :: field_instance_IDs
+   integer,          intent(in), dimension(:), optional :: necessity
+   integer,          intent(in)                         :: num_field_instances
+   integer                                              :: interface_id
+   integer                                              :: local_necessity(2)
+   character *2048                                      :: local_annotation
+   
+   local_annotation = ""
+   if (present(annotation)) local_annotation = annotation
+   
+   call register_inout_interface(trim(interface_name)//char(0), interface_id, 0, num_field_instances, field_instance_IDs, timer_ID, inst_or_aver, trim(local_annotation)//char(0), size(field_instance_IDs))
+   if (present(necessity)) then
+      call set_import_interface_fields_necessity(interface_id, necessity, size(necessity), trim(local_annotation)//char(0))
    endif
    CCPL_register_import_interface = interface_id;
 
@@ -2737,7 +2907,7 @@
    SUBROUTINE CCPL_get_local_comp_full_name(comp_id, comp_full_name, annotation)
    implicit none
    integer,          intent(in)                :: comp_id
-   character(len=*), intent(inout)             :: comp_full_name
+   character(len=*), intent(out)             :: comp_full_name
    character(len=*), intent(in), optional      :: annotation
 
    if (present(annotation)) then
@@ -2861,23 +3031,27 @@
 
 
    
-   SUBROUTINE CCPL_get_configurable_comps_full_names(comp_id, keyword, num_comps, comps_full_names, annotation)
+   SUBROUTINE CCPL_get_configurable_comps_full_names(comp_id, keyword, num_comps, comps_full_names, individual_or_family, annotation)
    integer,          intent(in)                 :: comp_id
    character(len=*), intent(in)                 :: keyword
    integer,          intent(out)                :: num_comps
    character(len=*), intent(out)                :: comps_full_names(:)
+   integer,          intent(out), optional      :: individual_or_family(:)
    character(len=*), intent(in), optional       :: annotation
    character *2048                              :: local_annotation
-   integer                                      :: size_comps_full_names, i
+   integer                                      :: size_comps_full_names, size_individual_or_family, i, local_individual_or_family
    
 
    local_annotation = ""
    if (present(annotation)) local_annotation = annotation
    size_comps_full_names = size(comps_full_names)
+   size_individual_or_family = -1
+   if (present(individual_or_family)) size_individual_or_family=size(individual_or_family)
 
-   call ccpl_load_comps_full_names_from_config_file(comp_id, trim(keyword)//char(0), size_comps_full_names, num_comps, trim(local_annotation)//char(0))
+   call ccpl_load_comps_full_names_from_config_file(comp_id, trim(keyword)//char(0), size_comps_full_names, size_individual_or_family, num_comps, trim(local_annotation)//char(0))
    do i = 1, num_comps
-      call ccpl_get_one_comp_full_name(comp_id, len(comps_full_names(i)), i, comps_full_names(i), trim(local_annotation)//char(0)) 
+      call ccpl_get_one_comp_full_name(comp_id, len(comps_full_names(i)), i, comps_full_names(i), local_individual_or_family, trim(local_annotation)//char(0)) 
+      if (present(individual_or_family)) individual_or_family(i) = local_individual_or_family
    enddo
    call ccpl_finish_getting_configurable_comps_full_names(comp_id, trim(local_annotation)//char(0)) 
 
@@ -2885,25 +3059,46 @@
    
 
 
-   SUBROUTINE CCPL_do_external_coupling_generation(num_comps, comps_full_names, annotation)
+   SUBROUTINE CCPL_do_external_coupling_generation(num_comps, comps_full_names, individual_or_family, annotation)
    implicit none
    integer,          intent(in)                :: num_comps
    character(len=*), intent(in)                :: comps_full_names(:)
+   integer,          intent(in), optional      :: individual_or_family(:)
    character(len=*), intent(in), optional      :: annotation
-   integer                                     :: size_comps_full_names, i
+   integer                                     :: size_comps_full_names, i, j
    character *2048                             :: local_annotation
+   integer,          allocatable               :: local_individual_or_family(:)
+   integer                                     :: size_individual_or_family
    
-   
+
+   if (num_comps > 0) then
+       allocate(local_individual_or_family(num_comps))
+   else
+       allocate(local_individual_or_family(100))
+   endif
+   local_individual_or_family(:) = 1 
+   size_individual_or_family = num_comps
+   if (present(individual_or_family)) then
+      size_individual_or_family = size(individual_or_family)
+      j = num_comps
+      if (size_individual_or_family .lt. j) j = size_individual_or_family
+      do i = 1, j
+         local_individual_or_family(i) = individual_or_family(i)
+      enddo
+   endif
+
    local_annotation = ""
    if (present(annotation)) local_annotation = annotation
    
    size_comps_full_names = size(comps_full_names)
-   call ccpl_begin_external_coupling_generation(num_comps, size_comps_full_names, trim(local_annotation)//char(0))
+   call ccpl_begin_external_coupling_generation(num_comps, size_comps_full_names, size_individual_or_family, trim(local_annotation)//char(0))
    do i = 1, num_comps
-       call ccpl_add_comp_for_external_coupling_generation(trim(comps_full_names(i))//char(0), trim(local_annotation)//char(0)) 
+       call ccpl_add_comp_for_external_coupling_generation(trim(comps_full_names(i))//char(0), local_individual_or_family(i), trim(local_annotation)//char(0)) 
    enddo 
    call ccpl_end_external_coupling_generation(trim(local_annotation)//char(0))
    write(*,*) "size of comps_full_names is ", size_comps_full_names
+
+   deallocate(local_individual_or_family)
    
    END SUBROUTINE CCPL_do_external_coupling_generation
 

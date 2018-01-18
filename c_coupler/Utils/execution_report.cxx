@@ -10,7 +10,7 @@
 #ifndef ONLY_CoR
 #include "global_data.h"
 #else
-#define NAME_STR_SIZE 512
+#define NAME_STR_SIZE 1024
 #endif
 #include "execution_report.h"
 #include "cor_global_data.h"
@@ -23,20 +23,22 @@ bool report_external_log_enabled;
 bool report_error_enabled;
 bool report_progress_enabled;
 bool report_internal_log_enabled;
+bool flush_log_file;
 
 
 void import_report_setting()
 {
 	char XML_file_name[NAME_STR_SIZE];
 	int line_number;
-	char keywords[4][NAME_STR_SIZE];
-	bool report_setting[4];
+	char keywords[5][NAME_STR_SIZE];
+	bool report_setting[5];
 
 
 	report_external_log_enabled = false;
 	report_error_enabled = false;
 	report_internal_log_enabled = false;
 	report_progress_enabled = false;
+	flush_log_file = false;
 
 	sprintf(XML_file_name, "%s/all/CCPL_report.xml", comp_comm_group_mgt_mgr->get_config_root_dir());
 	TiXmlDocument *XML_file = open_XML_file_to_read(-1, XML_file_name, MPI_COMM_WORLD, false);
@@ -47,9 +49,10 @@ void import_report_setting()
 	sprintf(keywords[1], "report_external_log");
 	sprintf(keywords[2], "report_progress");
 	sprintf(keywords[3], "report_error");
+	sprintf(keywords[4], "flush_log_file");
 	
 	TiXmlElement *XML_element = XML_file->FirstChildElement();
-	for (int i = 0; i < 4; i ++) {
+	for (int i = 0; i < 5; i ++) {
 		report_setting[i] = false;
 		const char *setting = XML_element->Attribute(keywords[i], &line_number);
 		if (setting == NULL)
@@ -64,6 +67,7 @@ void import_report_setting()
 	report_external_log_enabled = report_setting[1];
 	report_progress_enabled = report_setting[2];
 	report_error_enabled = report_setting[3];
+	flush_log_file = report_setting[4];
 }
 
 
@@ -79,12 +83,12 @@ void wtime(double *t)
 }
 
 
-void report_header(int report_type, int comp_id, bool &condition, char *output_string)
+void report_header(int report_type, int comp_id, bool &condition, char *output_format)
 {
 	if (comp_id != -1 && (comp_id == comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id() || !comp_comm_group_mgt_mgr->is_legal_local_comp_id(comp_id) || components_time_mgrs->get_time_mgr(comp_id) == NULL))
 		comp_id = -1;
 	
-	output_string[0] = '\0';
+	output_format[0] = '\0';
 	
 	switch (report_type) {
 		case REPORT_ERROR:
@@ -115,37 +119,37 @@ void report_header(int report_type, int comp_id, bool &condition, char *output_s
 	switch (report_type) {
 		case REPORT_ERROR:
 			if (line_number > 0 && execution_phase_number < 2)
-				sprintf(output_string+strlen(output_string), "CoR REPORT ERROR at script line %d: ", line_number);
+				sprintf(output_format+strlen(output_format), "CoR REPORT ERROR at script line %d: ", line_number);
 #ifndef ONLY_CoR
-			else sprintf(output_string+strlen(output_string), "C-Coupler REPORT ERROR: ");
+			else sprintf(output_format+strlen(output_format), "C-Coupler REPORT ERROR: ");
 #endif
 			break;
 		case REPORT_LOG:
 			if (line_number > 0 && execution_phase_number < 2)
-				sprintf(output_string+strlen(output_string), "CoR REPORT LOG at script line %d: ", line_number);
+				sprintf(output_format+strlen(output_format), "CoR REPORT LOG at script line %d: ", line_number);
 #ifndef ONLY_CoR
-			else sprintf(output_string+strlen(output_string), "C-Coupler REPORT LOG: ");
+			else sprintf(output_format+strlen(output_format), "C-Coupler REPORT LOG: ");
 #endif			
 			break;
 			case REPORT_EXTERNAL_LOG:
 				if (line_number > 0 && execution_phase_number < 2)
-					sprintf(output_string+strlen(output_string), "CoR REPORT LOG at script line %d: ", line_number);
+					sprintf(output_format+strlen(output_format), "CoR REPORT LOG at script line %d: ", line_number);
 #ifndef ONLY_CoR
-				else sprintf(output_string+strlen(output_string), "C-Coupler REPORT LOG: ");
+				else sprintf(output_format+strlen(output_format), "C-Coupler REPORT LOG: ");
 #endif			
 				break;
 		case REPORT_WARNING:
 			if (line_number > 0 && execution_phase_number < 2)
-				sprintf(output_string+strlen(output_string), "CoR REPORT WARNING at script line %d: ", line_number);
+				sprintf(output_format+strlen(output_format), "CoR REPORT WARNING at script line %d: ", line_number);
 #ifndef ONLY_CoR
-			else sprintf(output_string+strlen(output_string), "C-Coupler REPORT WARNING: ");
+			else sprintf(output_format+strlen(output_format), "C-Coupler REPORT WARNING: ");
 #endif
 			break;
 		case REPORT_PROGRESS:
 			if (line_number > 0 && execution_phase_number < 2)
-				sprintf(output_string+strlen(output_string), "CoR REPORT PROGRESS at script line %d: ", line_number);
+				sprintf(output_format+strlen(output_format), "CoR REPORT PROGRESS at script line %d: ", line_number);
 #ifndef ONLY_CoR
- 			else sprintf(output_string+strlen(output_string), "C-Coupler REPORT PROGRESS: ");
+ 			else sprintf(output_format+strlen(output_format), "C-Coupler REPORT PROGRESS: ");
 #endif
 			break;
 		default:
@@ -156,12 +160,12 @@ void report_header(int report_type, int comp_id, bool &condition, char *output_s
 #ifndef ONLY_CoR
 	if (!(line_number > 0 && execution_phase_number < 2) && comp_comm_group_mgt_mgr != NULL) {
 		if (comp_id == -1)
-			sprintf(output_string+strlen(output_string)-2, " in the root component model corresponding to the executable named \"%s\": ", comp_comm_group_mgt_mgr->get_executable_name());
+			sprintf(output_format+strlen(output_format)-2, " in the root component model corresponding to the executable named \"%s\": ", comp_comm_group_mgt_mgr->get_executable_name());
 		else {
 			int current_date = components_time_mgrs->get_time_mgr(comp_id)->get_current_date();
 			int current_second = components_time_mgrs->get_time_mgr(comp_id)->get_current_second();
 			int current_step_id = components_time_mgrs->get_time_mgr(comp_id)->get_current_step_id();
-			sprintf(output_string+strlen(output_string)-2, " in the component model \"%s\" corresponding to the executable named \"%s\", at the current simulation time of %08d-%05d (the current step number is %d): ", 
+			sprintf(output_format+strlen(output_format)-2, " in the component model \"%s\" corresponding to the executable named \"%s\", at the current simulation time of %08d-%05d (the current step number is %d): ", 
 				    comp_comm_group_mgt_mgr->get_global_node_of_local_comp(comp_id,"execution report")->get_full_name(), comp_comm_group_mgt_mgr->get_executable_name(), current_date, current_second, current_step_id);
 		}
 	}
@@ -171,46 +175,49 @@ void report_header(int report_type, int comp_id, bool &condition, char *output_s
 
 void execution_report(int report_type, int comp_id, bool condition, const char *format, ...)
 {
-	char output_string[NAME_STR_SIZE*4];
-	FILE *log_file;
-	
+	char output_format[NAME_STR_SIZE*16];
+	char output_string[NAME_STR_SIZE*16*16];
 
-	report_header(report_type, comp_id, condition, output_string);
+
+	report_header(report_type, comp_id, condition, output_format);
 	
 	if (!condition)
 		return;
 	
-	strcat(output_string, format);
-	strcat(output_string, "\n\n");
+	strcat(output_format, format);
+	strcat(output_format, "\n\n");
 
 	if (comp_id != -1 && (comp_id == comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id() || !comp_comm_group_mgt_mgr->is_legal_local_comp_id(comp_id) || components_time_mgrs->get_time_mgr(comp_id) == NULL))
 		comp_id = -1;
 	
-	if (comp_comm_group_mgt_mgr == NULL || (comp_id == -1 && comp_comm_group_mgt_mgr->get_exe_log_file_name(comp_id) == NULL)) {
+	if (comp_comm_group_mgt_mgr == NULL) {
 		va_list pArgList;
 	    va_start(pArgList, format);
-		vfprintf(stdout, output_string, pArgList);
+		vfprintf(stdout, output_format, pArgList);
 		va_end(pArgList);
-		fflush(stdout);
+		if (flush_log_file || report_type == REPORT_ERROR)
+			fflush(stdout);
 	}
 	else {
-		const char *log_file_name = comp_comm_group_mgt_mgr->get_exe_log_file_name(comp_id);
-		FILE *log_file = fopen(log_file_name, "a+");
 		va_list pArgList;
 	    va_start(pArgList, format);
-		vfprintf(log_file, output_string, pArgList);
+		vsprintf(output_string, output_format, pArgList);
 		va_end(pArgList);
-		fclose(log_file);
+		const char *log_file_name1 = comp_comm_group_mgt_mgr->get_exe_log_file_name();
+		const char *log_file_name2 = NULL;
+		comp_comm_group_mgt_mgr->output_log(output_string, flush_log_file || report_type == REPORT_ERROR);
 		if (comp_id != -1) {
-			log_file_name = comp_comm_group_mgt_mgr->get_comp_log_file_name(comp_id);
-			log_file = fopen(log_file_name, "a+");
 			va_start(pArgList, format);
-			vfprintf(log_file, output_string, pArgList);
+			vsprintf(output_string, output_format, pArgList);
 			va_end(pArgList);
-			fclose(log_file);
+			log_file_name2 = comp_comm_group_mgt_mgr->search_global_node(comp_id)->get_comp_ccpl_log_file_name();
+			comp_comm_group_mgt_mgr->search_global_node(comp_id)->output_log(output_string, flush_log_file || report_type == REPORT_ERROR);
 		}
-		if (report_type == REPORT_ERROR)
-			printf("ERROR happens. Please check the log file \"%s\"\n\n", log_file_name);
+		if (report_type == REPORT_ERROR) {
+			if (log_file_name2 == NULL)
+				printf("ERROR happens. Please check the log file \"%s\"\n\n", log_file_name1);
+			else printf("ERROR happens. Please check the log file \"%s\" or \"%s\"\n\n", log_file_name1, log_file_name2);
+		}
 	}
 
 	if (report_type == REPORT_ERROR)
@@ -221,38 +228,7 @@ void execution_report(int report_type, int comp_id, bool condition, const char *
 
 void execution_report(int report_type, int comp_id, bool condition) 
 {
-	char output_string[NAME_STR_SIZE*4];
-
-
-	report_header(report_type, comp_id, condition, output_string);
-
-	if (!condition)
-		return;
-
-	if (comp_id != -1 && (comp_id == comp_comm_group_mgt_mgr->get_global_node_root()->get_comp_id() || !comp_comm_group_mgt_mgr->is_legal_local_comp_id(comp_id) || components_time_mgrs->get_time_mgr(comp_id) == NULL))
-		comp_id = -1;
-
-	if (comp_comm_group_mgt_mgr == NULL || (comp_id == -1 && comp_comm_group_mgt_mgr->get_exe_log_file_name(comp_id) == NULL)) {
-		printf("%s\n\n", output_string);
-		fflush(NULL);
-	}
-	else {
-		const char *log_file_name = comp_comm_group_mgt_mgr->get_exe_log_file_name(comp_id);
-		FILE *log_file = fopen(log_file_name, "a+");
-		fprintf(log_file, "%s\n\n", output_string);
-		fclose(log_file);
-		if (comp_id != -1) {
-			log_file_name = comp_comm_group_mgt_mgr->get_comp_log_file_name(comp_id);
-			log_file = fopen(log_file_name, "a+");
-			fprintf(log_file, "%s\n\n", output_string);
-			fclose(log_file);
-		}
-		if (report_type == REPORT_ERROR)
-			printf("ERROR happens. Please check the log file \"%s\"\n\n", log_file_name);
-	}
-
-	if (report_type == REPORT_ERROR)
-		assert(false);
+	execution_report(report_type, comp_id, condition, "report without explicit hint");
 }
 
 

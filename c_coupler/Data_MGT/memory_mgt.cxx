@@ -16,12 +16,6 @@
 #include <stdio.h>
 
 
-Field_mem_info *alloc_mem(const char *field_name, int decomp_id, int comp_or_grid_id, int buf_mark, const char *data_type, const char *field_unit, const char *annotation)
-{
-	return memory_manager->alloc_mem(field_name, decomp_id, comp_or_grid_id, buf_mark, data_type, field_unit, annotation, true);
-}
-
-
 Field_mem_info::Field_mem_info(const char *field_name, int decomp_id, int comp_or_grid_id, 
 	                           int buf_mark, const char *unit, const char *data_type, const char *annotation, bool check_field_name)
 {
